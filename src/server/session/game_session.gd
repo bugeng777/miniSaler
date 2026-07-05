@@ -36,7 +36,9 @@ var _has_enet: bool = false  ## 是否启动了 ENet 服务器
 var _server_peer: ENetMultiplayerPeer = null
 
 var _settlement_triggered: bool = false  ## 防止重复结算
-var _tick_count: int = 0  ## 市场 tick 计数器
+var _tick_count: int = 0
+var _ready_players: Dictionary = {}
+var _prev_snapshots: Dictionary = {}
 
 ## 增量广播
 const FULL_SNAPSHOT_INTERVAL: int = 10
@@ -90,6 +92,8 @@ func stop_server() -> void:
 
 func goto_era_select() -> void:
 	_settlement_triggered = false
+	_ready_players.clear()
+	_prev_snapshots.clear()
 	# 清理本局数据
 	if player_manager:
 		player_manager.clear_all()
@@ -164,6 +168,7 @@ func host_select_era(era_id: StringName) -> void:
 func host_start_game() -> void:
 	_settlement_triggered = false
 	_tick_count = 0
+	_prev_snapshots.clear()
 	_loadout_timer.stop()  # 取消自动超时
 	goto_enter_market()
 	# 短暂延迟后进入交易
@@ -281,13 +286,13 @@ func _on_market_tick(snapshots: Array, fear_greed_index: float) -> void:
 			_prev_snapshots[snap.symbol] = snap
 
 
+func _on_circuit_breaker(symbol: StringName, duration: float) -> void:
+	_broadcast({"msg_type": &"circuit_breaker", "symbol": symbol, "duration": duration})
+
+
 func _on_order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
 	if player_manager:
 		player_manager.on_order_filled(order.player_id, order.order_id, fill_price, fill_qty)
-
-
-func _on_circuit_breaker(symbol: StringName, duration: float) -> void:
-	_broadcast({"msg_type": &"circuit_breaker", "symbol": symbol, "duration": duration})
 
 
 func _on_extraction_window_opened(duration: float) -> void:
@@ -365,11 +370,18 @@ func _on_bot_action(bot_id: int, action: Dictionary) -> void:
 			GameEnums.OrderType.MARKET, quantity)
 
 
-## ─── RPC 接收客户端请求（多人模式）──────────────────────────────────────────
+## ─── RPC ──────────────────────────────────────────────────────────────
+
+func _validate_peer(peer_id: int) -> bool:
+	if not _has_enet: return true
+	if peer_id <= 0: return false
+	return peer_id in multiplayer.get_peers()
+
 
 @rpc("any_peer", "call_local")
 func rpc_submit_order(data: Dictionary) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	host_submit_order(pid,
 		StringName(data.get("symbol", "")),
 		data.get("side", GameEnums.OrderSide.BUY),
@@ -381,24 +393,29 @@ func rpc_submit_order(data: Dictionary) -> void:
 @rpc("any_peer", "call_local")
 func rpc_request_extraction() -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	host_request_extraction(pid)
 
 
 @rpc("any_peer", "call_local")
 func rpc_activate_skill(skill_id: StringName) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	if skill_system:
 		skill_system.activate_skill(pid, skill_id)
 
 
 @rpc("any_peer", "call_local")
 func rpc_select_era(era_id: StringName) -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	host_select_era(era_id)
 
 
 @rpc("any_peer", "call_local")
 func rpc_configure_loadout(data: Dictionary) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	var extra_funds: float = data.get("extra_funds", 0.0)
 	var skill_ids: Array = data.get("skill_ids", [])
 	if player_manager:
@@ -444,6 +461,20 @@ func rpc_request_state_sync() -> void:
 	rpc_id(pid, "rpc_sync_data", NetworkProtocol.build_game_phase_msg(_current_phase, {}))
 
 
+func _check_all_ready() -> void:
+	if not _has_enet: return
+	var peers := multiplayer.get_peers()
+	if peers.is_empty(): return
+	for peer_id in peers:
+		if not _ready_players.get(peer_id, false): return
+	_settlement_triggered = false
+	_tick_count = 0
+	_prev_snapshots.clear()
+	_ready_players.clear()
+	goto_enter_market()
+	get_tree().create_timer(1.5).timeout.connect(func(): goto_trading())
+
+
 ## ─── 网络事件 ────────────────────────────────────────────────────────────────
 func _on_peer_connected(peer_id: int) -> void:
 	print("GameSession: Peer connected: %d" % peer_id)
@@ -451,6 +482,7 @@ func _on_peer_connected(peer_id: int) -> void:
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	print("GameSession: Peer disconnected: %d" % peer_id)
+	_ready_players.erase(peer_id)
 
 
 ## ─── 广播 ────────────────────────────────────────────────────────────────────
