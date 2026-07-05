@@ -176,6 +176,10 @@ class PlayerProfile:
 	var skill_progress: Dictionary = {}  ## skill_id -> SkillProgress.to_dict()
 	var player_level: int = 1
 	var player_exp: int = 0
+	var current_streak: int = 0         ## 当前连续撤离成功次数
+	var total_busts: int = 0             ## 累计爆仓次数
+	var era_extractions: Dictionary = {} ## era_id -> 该时代撤离成功次数
+	var last_welfare_time: String = ""   ## 上次低保时间（ISO 8601）
 	var created_at: String = ""
 
 	func get_win_rate() -> float:
@@ -203,6 +207,10 @@ class PlayerProfile:
 			"skill_progress": skill_progress,
 			"player_level": player_level,
 			"player_exp": player_exp,
+			"current_streak": current_streak,
+			"total_busts": total_busts,
+			"era_extractions": era_extractions,
+			"last_welfare_time": last_welfare_time,
 			"created_at": created_at,
 		}
 
@@ -225,5 +233,9 @@ class PlayerProfile:
 		prof.skill_progress = data.get("skill_progress", {})
 		prof.player_level = data.get("player_level", 1)
 		prof.player_exp = data.get("player_exp", 0)
+		prof.current_streak = data.get("current_streak", 0)
+		prof.total_busts = data.get("total_busts", 0)
+		prof.era_extractions = data.get("era_extractions", {})
+		prof.last_welfare_time = data.get("last_welfare_time", "")
 		prof.created_at = data.get("created_at", "")
 		return prof
