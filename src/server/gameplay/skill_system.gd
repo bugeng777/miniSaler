@@ -9,6 +9,14 @@ class_name SkillSystem
 ## ─── 信号（接口 B：SkillSystem -> GameSession）────────────────────────────
 signal skill_activated(player_id: int, skill_id: StringName, effect: Dictionary)
 signal skill_cooldown_updated(player_id: int, skill_id: StringName, remaining: float)
+## 被动技能效果变更信号（装备技能时触发，供 GameSession 转发给其他子系统）
+## modifiers 字典 key = skill_id, value = base_value，语义如下：
+##   news_reader    : float — 减少信息延迟秒数
+##   sentiment_sense: float — 是否显示恐贪指数（1.0=显示，bool 语义）
+##   short_expert   : float — 做空收益加成比例（如 0.2 = +20%）
+##   safe_harbor    : float — 撤离窗口延长秒数
+##   diversify      : float — 持仓 >3 时手续费减免比例（如 0.5 = 减半）
+signal passive_effects_changed(player_id: int, modifiers: Dictionary)
 
 
 ## 技能定义缓存
@@ -38,6 +46,9 @@ func equip_skills(player_id: int, skill_ids: Array[StringName]) -> void:
 			state.skill_id = sid
 			runtime[sid] = state
 	_player_skills[player_id] = runtime
+	# 装备完成后立即广播被动效果，供 GameSession 转发给相关子系统
+	var modifiers := get_passive_modifiers(player_id)
+	passive_effects_changed.emit(player_id, modifiers)
 
 
 ## 每 tick 更新冷却（由 GameSession 调用）
