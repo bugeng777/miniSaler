@@ -1,0 +1,127 @@
+## 技能系统
+## 所有权: WS2 (游戏玩法组)
+## 管理技能的加载、激活、冷却和效果计算
+## 参考: PRD §四 技能系统
+extends Node
+class_name SkillSystem
+
+
+## ─── 信号（接口 B：SkillSystem -> GameSession）────────────────────────────
+signal skill_activated(player_id: int, skill_id: StringName, effect: Dictionary)
+signal skill_cooldown_updated(player_id: int, skill_id: StringName, remaining: float)
+
+
+## 技能定义缓存
+var _skill_defs: Dictionary = {}  ## skill_id -> SkillTypes.SkillDef
+## 每个玩家的运行时技能状态
+var _player_skills: Dictionary = {}  ## player_id -> Dictionary(skill_id -> SkillTypes.SkillRuntimeState)
+
+
+func _ready() -> void:
+	_load_skill_definitions()
+
+
+## 加载所有技能定义
+func _load_skill_definitions() -> void:
+	_skill_defs.clear()
+	for raw in SkillTypes.ALL_SKILLS:
+		var def := SkillTypes.SkillDef.from_dict(raw)
+		_skill_defs[def.skill_id] = def
+
+
+## 为玩家装备技能（准备阶段调用）
+func equip_skills(player_id: int, skill_ids: Array[StringName]) -> void:
+	var runtime: Dictionary = {}
+	for sid in skill_ids:
+		if _skill_defs.has(sid):
+			var state := SkillTypes.SkillRuntimeState.new()
+			state.skill_id = sid
+			runtime[sid] = state
+	_player_skills[player_id] = runtime
+
+
+## 每 tick 更新冷却（由 GameSession 调用）
+func update_cooldowns(delta: float) -> void:
+	for player_id in _player_skills:
+		var skills: Dictionary = _player_skills[player_id]
+		for skill_id in skills:
+			var state: SkillTypes.SkillRuntimeState = skills[skill_id]
+			if state.cooldown_remaining > 0.0:
+				state.cooldown_remaining -= delta
+				if state.cooldown_remaining <= 0.0:
+					state.cooldown_remaining = 0.0
+				skill_cooldown_updated.emit(player_id, skill_id, state.cooldown_remaining)
+			if state.effect_remaining > 0.0:
+				state.effect_remaining -= delta
+				if state.effect_remaining <= 0.0:
+					state.is_active = false
+					state.effect_remaining = 0.0
+
+
+## 激活主动技能
+func activate_skill(player_id: int, skill_id: StringName) -> Dictionary:
+	if not _player_skills.has(player_id):
+		return {}
+	var skills: Dictionary = _player_skills[player_id]
+	if not skills.has(skill_id):
+		return {}
+	var state: SkillTypes.SkillRuntimeState = skills[skill_id]
+	if not _skill_defs.has(skill_id):
+		return {}
+	var def: SkillTypes.SkillDef = _skill_defs[skill_id]
+	# 检查是否为主动技能
+	if def.trigger != GameEnums.SkillTrigger.ACTIVE:
+		return {}
+	# 检查冷却
+	if state.cooldown_remaining > 0.0:
+		return {}
+	# 激活
+	state.is_active = true
+	state.cooldown_remaining = def.cooldown
+	if def.duration > 0.0:
+		state.effect_remaining = def.duration
+	var effect := {"skill_id": skill_id, "value": def.base_value, "duration": def.duration}
+	skill_activated.emit(player_id, skill_id, effect)
+	return effect
+
+
+## 检查被动技能效果（返回修改器字典）
+func get_passive_modifiers(player_id: int) -> Dictionary:
+	var modifiers: Dictionary = {}
+	if not _player_skills.has(player_id):
+		return modifiers
+	var skills: Dictionary = _player_skills[player_id]
+	for skill_id in skills:
+		if not _skill_defs.has(skill_id):
+			continue
+		var def: SkillTypes.SkillDef = _skill_defs[skill_id]
+		if def.trigger == GameEnums.SkillTrigger.PASSIVE:
+			modifiers[skill_id] = def.base_value
+	return modifiers
+
+
+## 获取玩家技能状态列表（用于广播）
+func get_player_skill_states(player_id: int) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not _player_skills.has(player_id):
+		return result
+	var skills: Dictionary = _player_skills[player_id]
+	for skill_id in skills:
+		var state: SkillTypes.SkillRuntimeState = skills[skill_id]
+		result.append(state.to_dict())
+	return result
+
+
+## 获取技能定义
+func get_skill_def(skill_id: StringName) -> SkillTypes.SkillDef:
+	return _skill_defs.get(skill_id, null)
+
+
+## 获取所有技能定义
+func get_all_skill_defs() -> Dictionary:
+	return _skill_defs
+
+
+## 清理玩家技能
+func clear_player(player_id: int) -> void:
+	_player_skills.erase(player_id)
