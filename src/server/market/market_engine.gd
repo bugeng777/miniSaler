@@ -10,6 +10,8 @@ class_name MarketEngine
 signal tick_complete(stock_snapshots: Array[MarketTypes.StockSnapshot], fear_greed_index: float)
 signal circuit_breaker_triggered(symbol: StringName, duration: float)
 signal market_phase_changed(phase: StringName)
+## MD-04 修复：转发 OrderBook.order_filled，供 WS4 GameSession 连接（消除 OrderBook 直引）
+signal order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int)
 
 ## ─── 内部组件 ──────────────────────────────────────────────────────────────
 var _price_model: PriceModel = PriceModel.new()
@@ -34,6 +36,10 @@ func _ready() -> void:
 	_circuit_breaker.breaker_triggered.connect(func(sym: StringName, dur: float) -> void:
 		circuit_breaker_triggered.emit(sym, dur)
 	)
+	# MD-04：转发 OrderBook 成交信号，WS4 通过此信号获取成交数据
+	_order_book.order_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+		order_filled_passthrough.emit(order, fill_price, fill_qty)
+	)
 
 
 ## 启动市场（由 GameSession 调用）
@@ -46,6 +52,8 @@ func start_market(era_config: EraData) -> void:
 	_price_model.initialize_stocks(era_config.stock_configs)
 	_order_book.initialize(era_config.stock_configs)
 	_circuit_breaker.initialize(era_config.stock_configs)
+	# 任务 2.1: 根据时代波动特征配置 GARCH 参数
+	_configure_garch_for_era(era_config)
 	# 开始 tick
 	_is_running = true
 	_tick_timer.start()
@@ -95,6 +103,20 @@ func get_current_snapshot() -> Dictionary:
 ## 获取价格历史
 func get_price_history(symbol: StringName) -> Array[float]:
 	return _price_model.get_price_history(symbol)
+
+
+## 根据时代波动特征配置 GARCH 参数
+## 高波动时代（如硅谷2000 vol_mult=1.8）→ 更高基础方差 + 更强冲击反应
+## 低波动时代（如首尔1988 vol_mult=0.8）→ 更平稳的价格演化
+func _configure_garch_for_era(era_config: EraData) -> void:
+	var vol_mult := era_config.volatility_multiplier
+	# 基础方差随波动倍率平方缩放
+	var omega := 0.00001 * (vol_mult * vol_mult)
+	# 冲击反应随波动倍率线性增强
+	var alpha := 0.1 * vol_mult
+	# 波动持续性随波动倍率略微降低（高波动市场记忆更短）
+	var beta := clampf(0.85 / (1.0 + (vol_mult - 1.0) * 0.2), 0.6, 0.9)
+	_price_model.configure_garch(omega, alpha, beta)
 
 
 ## ─── 内部 tick 处理 ──────────────────────────────────────────────────────────

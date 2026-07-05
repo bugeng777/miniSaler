@@ -9,6 +9,8 @@ class_name PriceModel
 ## 单只股票的价格状态
 class StockPriceState:
 	var symbol: StringName = &""
+	var stock_name: String = ""     ## 股票显示名称（如"恒基地产"）
+	var sector: String = ""         ## 股票板块（如 "realestate"）
 	var current_price: float = 0.0
 	var open_price: float = 0.0
 	var high_price: float = 0.0
@@ -38,10 +40,11 @@ class StockPriceState:
 		garch_variance = base_vol * base_vol
 
 
-## GARCH(1,1) 参数
-const GARCH_OMEGA: float = 0.00001   ## 常数项
-const GARCH_ALPHA: float = 0.1       ## ARCH 项系数（冲击反应）
-const GARCH_BETA: float = 0.85       ## GARCH 项系数（波动持续性）
+## GARCH(1,1) 参数（可通过 configure_garch() 按时代调整）
+## 参考: modelDesign.md Ch.11 价格形成机制
+var garch_omega: float = 0.00001   ## 常数项（基础方差）
+var garch_alpha: float = 0.1       ## ARCH 项系数（冲击反应）
+var garch_beta: float = 0.85       ## GARCH 项系数（波动持续性）
 
 ## 均值回归参数
 const MEAN_REVERSION_SPEED: float = 0.005  ## 回归速度
@@ -61,6 +64,8 @@ func initialize_stocks(stock_configs: Array[Dictionary]) -> void:
 	for cfg in stock_configs:
 		var state := StockPriceState.new()
 		state.symbol = StringName(cfg.get("symbol", ""))
+		state.stock_name = cfg.get("name", "")
+		state.sector = cfg.get("sector", "")
 		state.reset(
 			cfg.get("base_price", 100.0),
 			cfg.get("volatility", 0.02)
@@ -99,7 +104,7 @@ func _update_garch(state: StockPriceState, vol_multiplier: float) -> void:
 		if prev > 0.0:
 			returns = (state.current_price - prev) / prev
 	# GARCH(1,1): sigma^2_t = omega + alpha * r^2_{t-1} + beta * sigma^2_{t-1}
-	state.garch_variance = GARCH_OMEGA + GARCH_ALPHA * returns * returns + GARCH_BETA * state.garch_variance
+	state.garch_variance = garch_omega + garch_alpha * returns * returns + garch_beta * state.garch_variance
 	state.current_volatility = sqrt(state.garch_variance) * vol_multiplier
 	# 限制波动率范围
 	state.current_volatility = clampf(state.current_volatility, 0.001, 0.1)
@@ -171,6 +176,8 @@ func _apply_news_impact(state: StockPriceState, impact: Dictionary) -> void:
 func _build_snapshot(state: StockPriceState) -> MarketTypes.StockSnapshot:
 	var snap := MarketTypes.StockSnapshot.new()
 	snap.symbol = state.symbol
+	snap.name = state.stock_name
+	snap.sector = state.sector
 	snap.open = state.open_price
 	snap.high = state.high_price
 	snap.low = state.low_price
@@ -205,6 +212,13 @@ func get_price_history(symbol: StringName) -> Array[float]:
 		var state: StockPriceState = _states[symbol]
 		return state.price_history
 	return []
+
+
+## 配置 GARCH 参数（由 MarketEngine 根据时代配置调用）
+func configure_garch(omega: float, alpha: float, beta: float) -> void:
+	garch_omega = omega
+	garch_alpha = alpha
+	garch_beta = beta
 
 
 ## 计算恐惧贪婪指数 (0-100, 50=中性)
