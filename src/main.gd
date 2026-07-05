@@ -207,6 +207,16 @@ func _connect_ui_signals() -> void:
 		if ext_panel:
 			ext_panel.extraction_requested.connect(_on_extraction_requested)
 
+	# ── 交易屏幕：主动技能激活 ──
+	var trading_screen_sb := _find_screen("trading")
+	if trading_screen_sb is TradingScreen:
+		var sb := (trading_screen_sb as TradingScreen).get_skill_bar()
+		if sb:
+			sb.skill_activate_requested.connect(func(skill_id: StringName) -> void:
+				if _skill_system:
+					_skill_system.activate_skill(HOST_PLAYER_ID, skill_id)
+			)
+
 	# ── 结算屏幕 ──
 	var settlement_screen := _find_screen("settlement")
 	if settlement_screen is SettlementScreen:
@@ -435,7 +445,16 @@ func _persist_settlement(data: Dictionary) -> void:
 			_player_profile.highest_session_profit = profit
 	# 更新段位
 	var rank_delta: int = data.get("rank_delta", 0)
-	_player_profile.rank_points = maxi(0, _player_profile.rank_points + rank_delta)
+	if _rank_system:
+		var result := _rank_system.apply_rank_change(
+			HOST_PLAYER_ID,
+			_player_profile.rank_points,
+			_player_profile.rank_tier,
+			rank_delta)
+		_player_profile.rank_points = result.points
+		_player_profile.rank_tier = result.tier
+	else:
+		_player_profile.rank_points = maxi(0, _player_profile.rank_points + rank_delta)
 	# 检查成就解锁
 	if _achievement_system:
 		var session_result := {"extracted": extracted, "profit": profit}
