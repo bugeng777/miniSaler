@@ -29,6 +29,14 @@ var _news_timer: Timer = null
 var _templates: Array[NewsTemplate] = []
 var _current_era_id: StringName = &""
 
+## 延迟队列：新闻生成后不立即 emit，而是放入队列等待到期
+class _DelayedNews:
+	var event_data: Dictionary = {}
+	var remaining: float = 0.0
+	var is_black_swan: bool = false
+
+var _delay_queue: Array = []  ## Array[_DelayedNews]
+
 
 func _ready() -> void:
 	_news_timer = Timer.new()
@@ -41,12 +49,14 @@ func _ready() -> void:
 ## 启动新闻系统
 func start(era_id: StringName) -> void:
 	_current_era_id = era_id
+	_delay_queue.clear()
 	_schedule_next_news()
 
 
 ## 停止
 func stop() -> void:
 	_news_timer.stop()
+	_delay_queue.clear()
 
 
 ## 安排下一条新闻
@@ -56,12 +66,35 @@ func _schedule_next_news() -> void:
 	_news_timer.start()
 
 
+## 每 tick 更新（由 GameSession 调用），处理延迟队列
+func update(delta: float) -> void:
+	var i := _delay_queue.size() - 1
+	while i >= 0:
+		var entry: _DelayedNews = _delay_queue[i]
+		entry.remaining -= delta
+		if entry.remaining <= 0.0:
+			_delay_queue.remove_at(i)
+			news_generated.emit(entry.event_data)
+		i -= 1
+
+
 ## 新闻计时器触发
 func _on_news_timer_timeout() -> void:
 	var event := _generate_news_event()
 	if event.is_black_swan:
+		# 黑天鹅事件无延迟，立即 emit
 		black_swan_triggered.emit(event.to_dict())
-	news_generated.emit(event.to_dict())
+		news_generated.emit(event.to_dict())
+	elif event.info_delay <= 0.0:
+		# 延迟为 0 的普通新闻也立即 emit
+		news_generated.emit(event.to_dict())
+	else:
+		# 放入延迟队列，等待到期 emit
+		var entry := _DelayedNews.new()
+		entry.event_data = event.to_dict()
+		entry.remaining = event.info_delay
+		entry.is_black_swan = false
+		_delay_queue.append(entry)
 	_schedule_next_news()
 
 
