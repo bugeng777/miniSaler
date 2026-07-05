@@ -247,11 +247,17 @@ func connect_subsystem_signals() -> void:
 	if skill_system:
 		skill_system.skill_activated.connect(_on_skill_activated)
 		skill_system.skill_cooldown_updated.connect(_on_skill_cooldown_updated)
+		# 跨组变更2: WS2 passive_effects_changed 转发
+		if skill_system.has_signal("passive_effects_changed"):
+			skill_system.connect("passive_effects_changed", _on_passive_effects_changed)
 	if bot_manager:
 		bot_manager.boss_entered.connect(_on_boss_entered)
 		bot_manager.bot_action_executed.connect(_on_bot_action)
 	if player_manager:
 		player_manager.player_bust_detected.connect(_on_bust_detected)
+		# 跨组变更3: WS3 order_rejected 转发
+		if player_manager.has_signal("order_rejected"):
+			player_manager.connect("order_rejected", _on_order_rejected)
 
 
 ## ─── 子系统事件处理（广播到 UI）───────────────────────────────────────────

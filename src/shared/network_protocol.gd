@@ -20,6 +20,8 @@ const MSG_ACHIEVEMENT := &"sync_achievement"
 const MSG_CHAT := &"sync_chat"
 const MSG_PLAYER_READY := &"sync_player_ready"
 const MSG_STATE_SYNC := &"sync_state"
+const MSG_PASSIVE_EFFECTS := &"sync_passive_effects"
+const MSG_ORDER_REJECTED := &"sync_order_rejected"
 
 # ─── Client -> Server 请求消息类型 ─────────────────────────────────────────────
 const MSG_SUBMIT_ORDER := &"submit_order"

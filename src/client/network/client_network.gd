@@ -20,6 +20,8 @@ signal boss_event_received(data: Dictionary)
 signal settlement_received(data: Dictionary)
 signal chat_received(player_id: int, text: String)
 signal player_ready_received(player_id: int, is_ready: bool)
+signal passive_effects_received(player_id: int, modifiers: Dictionary)
+signal order_rejected_received(player_id: int, reason: String)
 
 
 ## ─── 状态 ────────────────────────────────────────────────────────────────────
@@ -155,6 +157,10 @@ func rpc_sync_data(msg: Dictionary) -> void:
 			chat_received.emit(msg.get("player_id", 0), msg.get("text", ""))
 		NetworkProtocol.MSG_PLAYER_READY:
 			player_ready_received.emit(msg.get("player_id", 0), msg.get("is_ready", false))
+		NetworkProtocol.MSG_PASSIVE_EFFECTS:
+			passive_effects_received.emit(msg.get("player_id", 0), msg.get("modifiers", {}))
+		NetworkProtocol.MSG_ORDER_REJECTED:
+			order_rejected_received.emit(msg.get("player_id", 0), msg.get("reason", ""))
 
 
 ## ─── 网络事件回调 ──────────────────────────────────────────────────────────
