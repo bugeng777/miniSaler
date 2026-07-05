@@ -207,6 +207,16 @@ func _connect_ui_signals() -> void:
 		if ext_panel:
 			ext_panel.extraction_requested.connect(_on_extraction_requested)
 
+	# ── 交易屏幕：主动技能激活 ──
+	var trading_screen_sb := _find_screen("trading")
+	if trading_screen_sb is TradingScreen:
+		var sb := (trading_screen_sb as TradingScreen).get_skill_bar()
+		if sb:
+			sb.skill_activate_requested.connect(func(skill_id: StringName) -> void:
+				if _skill_system:
+					_skill_system.activate_skill(HOST_PLAYER_ID, skill_id)
+			)
+
 	# ── 结算屏幕 ──
 	var settlement_screen := _find_screen("settlement")
 	if settlement_screen is SettlementScreen:
@@ -342,7 +352,9 @@ func _on_market_tick(data: Dictionary) -> void:
 					var prices: Dictionary = {}
 					var snaps: Array = data.get("snapshots", [])
 					for s in snaps:
-						if s is Dictionary:
+						if s is MarketTypes.StockSnapshot:
+							prices[s.symbol] = s.close
+						elif s is Dictionary:
 							prices[StringName(s.get("symbol", ""))] = s.get("close", 0.0)
 					top.update_cash(state.cash)
 					top.update_assets(state.get_total_assets(prices))
@@ -356,7 +368,9 @@ func _on_market_tick(data: Dictionary) -> void:
 					var prices: Dictionary = {}
 					var snaps: Array = data.get("snapshots", [])
 					for s in snaps:
-						if s is Dictionary:
+						if s is MarketTypes.StockSnapshot:
+							prices[s.symbol] = s.close
+						elif s is Dictionary:
 							prices[StringName(s.get("symbol", ""))] = s.get("close", 0.0)
 					for snap in snapshots:
 						lb_data.append({
