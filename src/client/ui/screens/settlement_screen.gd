@@ -83,9 +83,9 @@ func _populate_leaderboard(players: Array) -> void:
 	for i in range(sorted_players.size()):
 		var p: Dictionary = sorted_players[i]
 		var row := Label.new()
-		var name: String = p.get("player_name", "Unknown")
+		var player_name: String = p.get("player_name", "Unknown")
 		var assets: float = p.get("total_assets", 0.0)
 		var result: int = p.get("extraction_result", 0)
 		var result_str := "✓" if result == GameEnums.ExtractionResult.SUCCESS else "✗"
-		row.text = "#%d %s %s: $%.0f" % [i + 1, result_str, name, assets]
+		row.text = "#%d %s %s: $%.0f" % [i + 1, result_str, player_name, assets]
 		_leaderboard_container.add_child(row)

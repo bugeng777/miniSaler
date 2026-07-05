@@ -76,6 +76,7 @@ func set_countdown(seconds: float) -> void:
 
 
 func load_skills(available_skills: Array[Dictionary]) -> void:
+	_selected_skills.clear()
 	for child in _skill_container.get_children():
 		child.queue_free()
 	for skill_data in available_skills:
