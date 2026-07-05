@@ -66,6 +66,41 @@ func check_achievements(player_id: int, profile: PlayerTypes.PlayerProfile,
 		if session_result.get("extracted", false) and session_result.get("had_black_swan", false):
 			newly_unlocked.append(&"black_swan_survivor")
 
+	# 连胜达人
+	if not profile.achievements.has(&"streak_5"):
+		if profile.current_streak >= 5:
+			newly_unlocked.append(&"streak_5")
+
+	# 港岛风云
+	if not profile.achievements.has(&"era_hk"):
+		if profile.era_extractions.get("hk_1997", 0) >= 3:
+			newly_unlocked.append(&"era_hk")
+
+	# 汉江英雄
+	if not profile.achievements.has(&"era_seoul"):
+		if profile.era_extractions.get("seoul_1988", 0) >= 3:
+			newly_unlocked.append(&"era_seoul")
+
+	# 硅谷传奇
+	if not profile.achievements.has(&"era_silicon"):
+		if profile.era_extractions.get("silicon_2000", 0) >= 3:
+			newly_unlocked.append(&"era_silicon")
+
+	# 做空大师
+	if not profile.achievements.has(&"short_master"):
+		if session_result.get("max_short_profit", 0.0) > 50_000:
+			newly_unlocked.append(&"short_master")
+
+	# 时空旅人
+	if not profile.achievements.has(&"all_eras"):
+		if profile.unlocked_eras.size() >= 5:
+			newly_unlocked.append(&"all_eras")
+
+	# 钢铁意志
+	if not profile.achievements.has(&"iron_man"):
+		if profile.total_busts >= 10:
+			newly_unlocked.append(&"iron_man")
+
 	for ach_id in newly_unlocked:
 		achievement_unlocked.emit(player_id, ach_id)
 
