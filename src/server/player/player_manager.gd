@@ -10,6 +10,8 @@ signal order_submitted(player_id: int, order: PlayerTypes.Order)
 signal order_filled(player_id: int, order: PlayerTypes.Order, fill_price: float)
 signal player_balance_changed(player_id: int, cash: float, total_assets: float)
 signal player_bust_detected(player_id: int)
+signal order_rejected(player_id: int, reason: String)
+signal level_up(player_id: int, new_level: int)
 
 
 ## 玩家状态表
@@ -89,9 +91,29 @@ func on_order_filled(player_id: int, order_id: String, fill_price: float, fill_q
 				state.cash -= (cost + fee)
 				state.add_position(order.symbol, fill_qty, fill_price)
 			elif order.side == GameEnums.OrderSide.SELL:
+				# 持仓验证
+				var pos: PlayerTypes.Position = state.positions.get(order.symbol, null)
+				if not pos or pos.quantity < fill_qty:
+					var reason := "SELL rejected: insufficient position in %s (have %d, need %d)" % [
+						order.symbol, pos.quantity if pos else 0, fill_qty]
+					push_warning("PlayerManager: " + reason)
+					order.status = GameEnums.OrderStatus.REJECTED
+					state.pending_orders.remove_at(i)
+					order_rejected.emit(player_id, reason)
+					break
 				state.cash += (cost - fee)
 				state.reduce_position(order.symbol, fill_qty, fill_price)
 			elif order.side == GameEnums.OrderSide.SHORT:
+				# 保证金验证
+				var required_margin := fill_price * fill_qty * Constants.MARGIN_RATIO
+				if state.cash < required_margin:
+					var reason := "SHORT rejected: insufficient margin (cash $%.2f, need $%.2f)" % [
+						state.cash, required_margin]
+					push_warning("PlayerManager: " + reason)
+					order.status = GameEnums.OrderStatus.REJECTED
+					state.pending_orders.remove_at(i)
+					order_rejected.emit(player_id, reason)
+					break
 				state.cash += (cost - fee)
 				state.add_position(order.symbol, fill_qty, fill_price, true)
 
