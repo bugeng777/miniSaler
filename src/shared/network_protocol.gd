@@ -107,3 +107,11 @@ static func build_chat_msg(player_id: int, text: String) -> Dictionary:
 
 static func build_player_ready_msg(player_id: int, is_ready: bool) -> Dictionary:
 	return {"msg_type": MSG_PLAYER_READY, "player_id": player_id, "is_ready": is_ready}
+
+
+static func build_passive_effects_msg(player_id: int, modifiers: Dictionary) -> Dictionary:
+	return {"msg_type": MSG_PASSIVE_EFFECTS, "player_id": player_id, "modifiers": modifiers}
+
+
+static func build_order_rejected_msg(player_id: int, reason: String) -> Dictionary:
+	return {"msg_type": MSG_ORDER_REJECTED, "player_id": player_id, "reason": reason}

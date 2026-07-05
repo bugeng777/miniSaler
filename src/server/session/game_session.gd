@@ -361,6 +361,18 @@ func _on_boss_entered(boss_name: String, boss_data: Dictionary) -> void:
 		"boss_name": boss_name, "data": boss_data})
 
 
+## WS2 passive_effects_changed 转发到客户端
+func _on_passive_effects_changed(player_id: int, modifiers: Dictionary) -> void:
+	_broadcast({"msg_type": NetworkProtocol.MSG_PASSIVE_EFFECTS,
+		"player_id": player_id, "modifiers": modifiers})
+
+
+## WS3 order_rejected 转发到客户端
+func _on_order_rejected(player_id: int, reason: String) -> void:
+	_broadcast({"msg_type": NetworkProtocol.MSG_ORDER_REJECTED,
+		"player_id": player_id, "reason": reason})
+
+
 func _on_bust_detected(player_id: int) -> void:
 	if extraction_engine:
 		extraction_engine.trigger_bust(player_id)
