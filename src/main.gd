@@ -163,6 +163,7 @@ func _build_game_ui() -> void:
 	_ui_manager.register_screen("trading", TradingScreen.new())
 	_ui_manager.register_screen("settlement", SettlementScreen.new())
 	_ui_manager.register_screen("profile", ProfileScreen.new())
+	_ui_manager.register_screen("safe_box", SafeBoxScreen.new())
 
 	_ui_manager.show_screen("era_select")
 
@@ -337,6 +338,10 @@ func _on_data_received(msg: Dictionary) -> void:
 			_on_skill_state(msg)
 		NetworkProtocol.MSG_BOSS_EVENT:
 			_on_boss_event(msg)
+		NetworkProtocol.MSG_PASSIVE_EFFECTS:
+			_on_passive_effects(msg)
+		NetworkProtocol.MSG_ORDER_REJECTED:
+			_on_order_rejected(msg)
 
 
 func _on_market_tick(data: Dictionary) -> void:
@@ -420,6 +425,32 @@ func _on_boss_event(data: Dictionary) -> void:
 		(trading as TradingScreen).add_news("[BOSS] %s 入场！" % boss_name)
 	if _sfx_manager:
 		_sfx_manager.play_sfx(SfxManager.SfxType.BOSS_ENTER)
+
+
+## 被动技能效果变更（WS2 → GameSession → main.gd → UI）
+func _on_passive_effects(data: Dictionary) -> void:
+	var trading := _find_screen("trading")
+	if trading is TradingScreen and trading.visible:
+		var player_id: int = data.get("player_id", 0)
+		if player_id == HOST_PLAYER_ID:
+			var modifiers: Dictionary = data.get("modifiers", {})
+			var names: Array[String] = []
+			for sid in modifiers:
+				var def := _skill_system.get_skill_def(StringName(sid)) if _skill_system else null
+				if def:
+					names.append(def.display_name)
+			if names.size() > 0:
+				(trading as TradingScreen).add_news("[被动技能] 生效: " + ", ".join(names))
+
+
+## 订单被拒绝（WS3 → GameSession → main.gd → UI）
+func _on_order_rejected(data: Dictionary) -> void:
+	var trading := _find_screen("trading")
+	if trading is TradingScreen and trading.visible:
+		var reason: String = data.get("reason", "订单被拒绝")
+		(trading as TradingScreen).add_news("[拒绝] " + reason)
+	if _sfx_manager:
+		_sfx_manager.play_sfx(SfxManager.SfxType.NEWS_ALERT)
 
 
 ## 辅助：查找已注册屏幕
