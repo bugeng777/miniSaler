@@ -10,6 +10,7 @@ class_name MarketEngine
 signal tick_complete(stock_snapshots: Array[MarketTypes.StockSnapshot], fear_greed_index: float)
 signal circuit_breaker_triggered(symbol: StringName, duration: float)
 signal market_phase_changed(phase: StringName)
+signal order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int)
 
 ## ─── 内部组件 ──────────────────────────────────────────────────────────────
 var _price_model: PriceModel = PriceModel.new()
@@ -34,6 +35,9 @@ func _ready() -> void:
 	_circuit_breaker.breaker_triggered.connect(func(sym: StringName, dur: float) -> void:
 		circuit_breaker_triggered.emit(sym, dur)
 	)
+	_order_book.order_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+		order_filled_passthrough.emit(order, fill_price, fill_qty)
+	)
 
 
 ## 启动市场（由 GameSession 调用）
@@ -46,6 +50,7 @@ func start_market(era_config: EraData) -> void:
 	_price_model.initialize_stocks(era_config.stock_configs)
 	_order_book.initialize(era_config.stock_configs)
 	_circuit_breaker.initialize(era_config.stock_configs)
+	_configure_garch_for_era(era_config)
 	# 开始 tick
 	_is_running = true
 	_tick_timer.start()
@@ -95,6 +100,14 @@ func get_current_snapshot() -> Dictionary:
 ## 获取价格历史
 func get_price_history(symbol: StringName) -> Array[float]:
 	return _price_model.get_price_history(symbol)
+
+
+func _configure_garch_for_era(era_config: EraData) -> void:
+	var vol_mult := era_config.volatility_multiplier
+	var omega := 0.00001 * (vol_mult * vol_mult)
+	var alpha := 0.1 * vol_mult
+	var beta := clampf(0.85 / (1.0 + (vol_mult - 1.0) * 0.2), 0.6, 0.9)
+	_price_model.configure_garch(omega, alpha, beta)
 
 
 ## ─── 内部 tick 处理 ──────────────────────────────────────────────────────────
