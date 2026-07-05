@@ -449,8 +449,7 @@ func rpc_configure_loadout(data: Dictionary) -> void:
 @rpc("any_peer", "call_local")
 func rpc_player_ready() -> void:
 	var pid := multiplayer.get_remote_sender_id()
-	if pid <= 0:
-		return
+	if not _validate_peer(pid): return
 	_player_ready_set[pid] = true
 	_broadcast(NetworkProtocol.build_player_ready_msg(pid, true))
 
@@ -458,16 +457,14 @@ func rpc_player_ready() -> void:
 @rpc("any_peer", "call_local")
 func rpc_chat_message(text: String) -> void:
 	var pid := multiplayer.get_remote_sender_id()
-	if pid <= 0:
-		return
+	if not _validate_peer(pid): return
 	_broadcast(NetworkProtocol.build_chat_msg(pid, text))
 
 
 @rpc("any_peer", "call_local")
 func rpc_request_state_sync() -> void:
 	var pid := multiplayer.get_remote_sender_id()
-	if pid <= 0:
-		return
+	if not _validate_peer(pid): return
 	if market_engine:
 		var snap := market_engine.get_current_snapshot()
 		var tick_data := MarketTypes.TickData.new()
