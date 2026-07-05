@@ -48,7 +48,7 @@ func _build_ui() -> void:
 		var btn := Button.new()
 		btn.text = str(preset)
 		btn.custom_minimum_size = Vector2(45, 28)
-		var val := preset
+		var val: int = preset
 		btn.pressed.connect(func() -> void: _qty_spinbox.value = val)
 		_quick_btn_container.add_child(btn)
 	var max_btn := Button.new()

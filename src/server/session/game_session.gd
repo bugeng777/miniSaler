@@ -42,7 +42,6 @@ var _prev_snapshots: Dictionary = {}
 
 ## 增量广播
 const FULL_SNAPSHOT_INTERVAL: int = 10
-var _prev_snapshots: Dictionary = {}
 var _player_ready_set: Dictionary = {}
 
 

@@ -20,7 +20,8 @@ class SkillDef:
 	var unlock_level: int = 0
 	## 是否为时代专属技能
 	var era_restricted: bool = false
-	## 限定时代 ID（仅 era_restricted=true 时有效）	var restricted_era: StringName = &""
+	## 限定时代 ID（仅 era_restricted=true 时有效）
+	var restricted_era: StringName = &""
 
 	func to_dict() -> Dictionary:
 		return {

@@ -93,7 +93,7 @@ func _match_market_order(order: MarketTypes.BookOrder) -> void:
 			opposite_side.pop_front()
 	if order.remaining > 0:
 		if _current_prices.has(order.symbol):
-			var fallback_price := _current_prices[order.symbol]
+			var fallback_price: float = _current_prices[order.symbol]
 			var remaining_qty := order.remaining
 			order.remaining = 0
 			order_filled.emit(order, fallback_price, remaining_qty)

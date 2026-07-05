@@ -67,7 +67,7 @@ const SAFE_BOX_SLOTS_LV2: int = 4             ## 升级后格数
 const SAFE_BOX_SLOTS_LV3: int = 6             ## 最高格数
 
 # ─── 段位积分阈值 ────────────────────────────────────────────────────────────────
-const RANK_THRESHOLDS: Dictionary = {
+var RANK_THRESHOLDS: Dictionary = {
 	GameEnums.RankTier.BRONZE: 0,
 	GameEnums.RankTier.SILVER: 500,
 	GameEnums.RankTier.GOLD: 1200,
