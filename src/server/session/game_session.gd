@@ -501,6 +501,7 @@ func _on_peer_connected(peer_id: int) -> void:
 func _on_peer_disconnected(peer_id: int) -> void:
 	print("GameSession: Peer disconnected: %d" % peer_id)
 	_ready_players.erase(peer_id)
+	_ready_players.erase(peer_id)
 
 
 ## ─── 广播 ────────────────────────────────────────────────────────────────────

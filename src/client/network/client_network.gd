@@ -20,6 +20,8 @@ signal boss_event_received(data: Dictionary)
 signal settlement_received(data: Dictionary)
 signal chat_received(player_id: int, text: String)
 signal player_ready_received(player_id: int, is_ready: bool)
+signal chat_received(player_id: int, text: String)
+signal player_ready_received(player_id: int, is_ready: bool)
 signal passive_effects_received(player_id: int, modifiers: Dictionary)
 signal order_rejected_received(player_id: int, reason: String)
 
@@ -159,6 +161,10 @@ func rpc_sync_data(msg: Dictionary) -> void:
 			chat_received.emit(msg.get("player_id", 0), msg.get("text", ""))
 		NetworkProtocol.MSG_PLAYER_READY:
 			player_ready_received.emit(msg.get("player_id", 0), msg.get("is_ready", false))
+		NetworkProtocol.MSG_CHAT:
+			chat_received.emit(msg.get("player_id", 0), msg.get("text", ""))
+		NetworkProtocol.MSG_PLAYER_READY:
+			player_ready_received.emit(msg.get("player_id", 0), msg.get("is_ready", false))
 		NetworkProtocol.MSG_PASSIVE_EFFECTS:
 			passive_effects_received.emit(msg.get("player_id", 0), msg.get("modifiers", {}))
 		NetworkProtocol.MSG_ORDER_REJECTED:
@@ -183,6 +189,70 @@ func _on_server_disconnected() -> void:
 	_is_connected = false
 	disconnected_from_server.emit()
 	print("ClientNetwork: Disconnected from server")
+	_start_reconnect()
+
+
+func _update_snapshot_cache(data: Dictionary) -> void:
+	for snap in data.get("snapshots", []):
+		var sym: StringName = StringName(snap.get("symbol", ""))
+		if sym != &"": _snapshot_cache[sym] = snap
+
+
+func _apply_delta(msg: Dictionary) -> void:
+	for snap in msg.get("changed", []):
+		var sym: StringName = StringName(snap.get("symbol", ""))
+		if sym != &"": _snapshot_cache[sym] = snap
+	market_tick_received.emit({"tick_index": msg.get("tick_index", 0),
+		"elapsed_time": msg.get("elapsed_time", 0.0),
+		"fear_greed_index": msg.get("fear_greed_index", 50.0),
+		"snapshots": _snapshot_cache.values()})
+
+
+func _start_reconnect() -> void:
+	if _is_reconnecting: return
+	_is_reconnecting = true
+	_reconnect_attempts = 0
+	_reconnect_timer = Timer.new()
+	_reconnect_timer.wait_time = RECONNECT_INTERVAL
+	_reconnect_timer.one_shot = true
+	_reconnect_timer.timeout.connect(_try_reconnect)
+	add_child(_reconnect_timer)
+	_reconnect_timer.start()
+
+
+func _stop_reconnect() -> void:
+	_is_reconnecting = false
+	_reconnect_attempts = 0
+	if _reconnect_timer:
+		_reconnect_timer.stop()
+		_reconnect_timer.queue_free()
+		_reconnect_timer = null
+
+
+func _try_reconnect() -> void:
+	_reconnect_attempts += 1
+	if _client_peer:
+		_client_peer.close()
+		_client_peer = null
+	_client_peer = ENetMultiplayerPeer.new()
+	var err := _client_peer.create_client(_server_address, _server_port)
+	if err != OK:
+		_handle_reconnect_failed()
+		return
+	multiplayer.multiplayer_peer = _client_peer
+	if _reconnect_timer:
+		_reconnect_timer.wait_time = RECONNECT_INTERVAL
+		_reconnect_timer.start()
+
+
+func _handle_reconnect_failed() -> void:
+	if _reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+		_stop_reconnect()
+		reconnection_failed.emit()
+	else:
+		if _reconnect_timer:
+			_reconnect_timer.wait_time = RECONNECT_INTERVAL
+			_reconnect_timer.start()
 	_start_reconnect()
 
 
