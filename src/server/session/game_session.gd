@@ -38,6 +38,11 @@ var _server_peer: ENetMultiplayerPeer = null
 var _settlement_triggered: bool = false  ## 防止重复结算
 var _tick_count: int = 0  ## 市场 tick 计数器
 
+## 增量广播
+const FULL_SNAPSHOT_INTERVAL: int = 10
+var _prev_snapshots: Dictionary = {}
+var _player_ready_set: Dictionary = {}
+
 
 func _ready() -> void:
 	_trading_timer = Timer.new()
@@ -223,12 +228,9 @@ func connect_subsystem_signals() -> void:
 	if market_engine:
 		market_engine.tick_complete.connect(_on_market_tick)
 		market_engine.circuit_breaker_triggered.connect(_on_circuit_breaker)
-		# 连接订单成交信号到玩家管理器
-		var ob := market_engine.get_order_book()
-		if ob and player_manager:
-			ob.order_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
-				player_manager.on_order_filled(order.player_id, order.order_id, fill_price, fill_qty)
-			)
+		# MD-04: 使用 MarketEngine passthrough 信号
+		if market_engine.has_signal("order_filled_passthrough") and player_manager:
+			market_engine.order_filled_passthrough.connect(_on_order_filled_passthrough)
 	if extraction_engine:
 		extraction_engine.extraction_window_opened.connect(_on_extraction_window_opened)
 		extraction_engine.extraction_window_closed.connect(_on_extraction_window_closed)
@@ -269,7 +271,19 @@ func _on_market_tick(snapshots: Array, fear_greed_index: float) -> void:
 	tick_data.elapsed_time = _tick_count * Constants.TICK_INTERVAL
 	tick_data.snapshots.assign(snapshots)
 	tick_data.fear_greed_index = fear_greed_index
-	_broadcast(NetworkProtocol.build_market_tick_msg(tick_data))
+	if _tick_count % FULL_SNAPSHOT_INTERVAL == 0 or _prev_snapshots.is_empty():
+		_broadcast(NetworkProtocol.build_market_tick_msg(tick_data))
+	else:
+		_broadcast(NetworkProtocol.build_market_tick_delta(_prev_snapshots, tick_data))
+	_prev_snapshots.clear()
+	for snap in snapshots:
+		if snap is MarketTypes.StockSnapshot:
+			_prev_snapshots[snap.symbol] = snap
+
+
+func _on_order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+	if player_manager:
+		player_manager.on_order_filled(order.player_id, order.order_id, fill_price, fill_qty)
 
 
 func _on_circuit_breaker(symbol: StringName, duration: float) -> void:
@@ -395,6 +409,39 @@ func rpc_configure_loadout(data: Dictionary) -> void:
 		for s in skill_ids:
 			typed_ids.append(StringName(s))
 		skill_system.equip_skills(pid, typed_ids)
+
+
+@rpc("any_peer", "call_local")
+func rpc_player_ready() -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if pid <= 0:
+		return
+	_player_ready_set[pid] = true
+	_broadcast(NetworkProtocol.build_player_ready_msg(pid, true))
+
+
+@rpc("any_peer", "call_local")
+func rpc_chat_message(text: String) -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if pid <= 0:
+		return
+	_broadcast(NetworkProtocol.build_chat_msg(pid, text))
+
+
+@rpc("any_peer", "call_local")
+func rpc_request_state_sync() -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if pid <= 0:
+		return
+	if market_engine:
+		var snap := market_engine.get_current_snapshot()
+		var tick_data := MarketTypes.TickData.new()
+		tick_data.tick_index = _tick_count
+		tick_data.elapsed_time = _tick_count * Constants.TICK_INTERVAL
+		for sym in snap:
+			tick_data.snapshots.append(snap[sym])
+		rpc_id(pid, "rpc_sync_data", NetworkProtocol.build_market_tick_msg(tick_data))
+	rpc_id(pid, "rpc_sync_data", NetworkProtocol.build_game_phase_msg(_current_phase, {}))
 
 
 ## ─── 网络事件 ────────────────────────────────────────────────────────────────
