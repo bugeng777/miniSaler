@@ -342,7 +342,9 @@ func _on_market_tick(data: Dictionary) -> void:
 					var prices: Dictionary = {}
 					var snaps: Array = data.get("snapshots", [])
 					for s in snaps:
-						if s is Dictionary:
+						if s is MarketTypes.StockSnapshot:
+							prices[s.symbol] = s.close
+						elif s is Dictionary:
 							prices[StringName(s.get("symbol", ""))] = s.get("close", 0.0)
 					top.update_cash(state.cash)
 					top.update_assets(state.get_total_assets(prices))
@@ -356,7 +358,9 @@ func _on_market_tick(data: Dictionary) -> void:
 					var prices: Dictionary = {}
 					var snaps: Array = data.get("snapshots", [])
 					for s in snaps:
-						if s is Dictionary:
+						if s is MarketTypes.StockSnapshot:
+							prices[s.symbol] = s.close
+						elif s is Dictionary:
 							prices[StringName(s.get("symbol", ""))] = s.get("close", 0.0)
 					for snap in snapshots:
 						lb_data.append({
