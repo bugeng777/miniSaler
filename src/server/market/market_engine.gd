@@ -110,11 +110,8 @@ func get_price_history(symbol: StringName) -> Array[float]:
 ## 低波动时代（如首尔1988 vol_mult=0.8）→ 更平稳的价格演化
 func _configure_garch_for_era(era_config: EraData) -> void:
 	var vol_mult := era_config.volatility_multiplier
-	# 基础方差随波动倍率平方缩放
 	var omega := 0.00001 * (vol_mult * vol_mult)
-	# 冲击反应随波动倍率线性增强
 	var alpha := 0.1 * vol_mult
-	# 波动持续性随波动倍率略微降低（高波动市场记忆更短）
 	var beta := clampf(0.85 / (1.0 + (vol_mult - 1.0) * 0.2), 0.6, 0.9)
 	_price_model.configure_garch(omega, alpha, beta)
 

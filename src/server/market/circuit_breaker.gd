@@ -67,6 +67,20 @@ func get_remaining_time(symbol: StringName) -> float:
 	return 0.0
 
 
+## 获取所有股票的熔断状态（供 GameSession 每 tick 广播）
+## 返回格式: {symbol: {"is_broken": bool, "remaining": float, "trigger_count": int}}
+func get_all_states() -> Dictionary:
+	var result: Dictionary = {}
+	for symbol in _states:
+		var state: BreakerState = _states[symbol]
+		result[symbol] = {
+			"is_broken": state.is_broken,
+			"remaining": state.remaining_time,
+			"trigger_count": state.trigger_count,
+		}
+	return result
+
+
 ## 重置（新一局）
 func reset() -> void:
 	_states.clear()
