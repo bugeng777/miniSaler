@@ -22,6 +22,7 @@ class BotState:
 	var last_action_time: float = 0.0
 	var action_interval: float = 3.0  ## 每次行动的间隔（秒）
 	var difficulty: float = 1.0       ## 难度系数
+	var price_history: Dictionary = {}  ## symbol -> Array[float] 最近 N tick 价格
 
 ## Boss 状态
 class BossState:
@@ -40,6 +41,13 @@ var _elapsed_time: float = 0.0
 var _boss_spawned: bool = false
 var _current_era: EraData = null
 var _symbols: Array[StringName] = []
+var _base_prices: Dictionary = {}  ## symbol -> base_price（用于逆向投资者判断偏离度）
+
+## 策略参数
+const TREND_WINDOW: int = 6           ## 趋势跟踪者观察最近 N tick
+const CONTRARIAN_DEVIATION: float = 0.08  ## 逆向投资者：偏离基准价 >8% 才操作
+const NOISE_PAUSE_CHANCE: float = 0.35   ## 噪音交易者：暂停观望概率
+const AGGRESSIVE_BOSS_FOLLOW_CHANCE: float = 0.7  ## 激进交易者：跟随 Boss 方向概率
 
 
 ## 初始化 Bot 池
@@ -50,6 +58,11 @@ func start(era_config: EraData, symbols: Array[StringName], bot_count: int = 7) 
 	_boss_spawned = false
 	_bots.clear()
 	_boss = null
+	# 记录基准价（用于逆向投资者判断偏离度）
+	_base_prices.clear()
+	for stock_cfg in era_config.stock_configs:
+		var sym := StringName(stock_cfg.get("symbol", ""))
+		_base_prices[sym] = stock_cfg.get("base_price", 100.0)
 
 	# 创建 Bot
 	var strategies := [
@@ -87,6 +100,17 @@ func start(era_config: EraData, symbols: Array[StringName], bot_count: int = 7) 
 func update(delta: float, prices: Dictionary) -> void:
 	_elapsed_time += delta
 
+	# 更新价格历史
+	for bot in _bots:
+		for symbol in prices:
+			if not bot.price_history.has(symbol):
+				bot.price_history[symbol] = []
+			var history: Array = bot.price_history[symbol]
+			history.append(prices[symbol])
+			# 保留最近 TREND_WINDOW * 2 条记录（策略行动间隔比 tick 慢）
+			if history.size() > TREND_WINDOW * 2:
+				history.remove_at(0)
+
 	# Boss 入场检查
 	if _boss and not _boss.is_active and _elapsed_time >= _boss.entry_time:
 		_spawn_boss()
@@ -119,33 +143,95 @@ func _execute_bot_strategy(bot: BotState, prices: Dictionary) -> void:
 
 	match bot.strategy:
 		GameEnums.BotStrategy.TREND_FOLLOWER:
-			# 追涨杀跌：价格涨就买，跌就卖
-			var should_buy := randf() < 0.5 + bot.difficulty * 0.1
-			action = _create_action(bot.bot_id, target_symbol,
-				GameEnums.OrderSide.BUY if should_buy else GameEnums.OrderSide.SELL,
-				randi_range(10, 50), current_price)
+			# 趋势跟踪者：检查最近 N tick 动量，持续上涨才买，持续下跌才卖
+			action = _trend_follower_action(bot, target_symbol, current_price)
 
 		GameEnums.BotStrategy.CONTRARIAN:
-			# 逆向投资：跌多了买，涨多了卖
-			var should_buy := randf() < 0.55
-			action = _create_action(bot.bot_id, target_symbol,
-				GameEnums.OrderSide.BUY if should_buy else GameEnums.OrderSide.SELL,
-				randi_range(5, 30), current_price)
+			# 逆向投资者：价格偏离基准价 >X% 才操作
+			action = _contrarian_action(bot, target_symbol, current_price)
 
 		GameEnums.BotStrategy.NOISE_TRADER:
-			# 噪音交易：随机买卖
-			var side := GameEnums.OrderSide.BUY if randf() < 0.5 else GameEnums.OrderSide.SELL
-			action = _create_action(bot.bot_id, target_symbol, side,
-				randi_range(1, 20), current_price)
+			# 噪音交易者：随机买卖 + 暂停观望概率
+			action = _noise_trader_action(bot, target_symbol, current_price)
 
 		GameEnums.BotStrategy.AGGRESSIVE:
-			# 激进交易：大额交易
-			var side := GameEnums.OrderSide.BUY if randf() < 0.5 else GameEnums.OrderSide.SELL
-			action = _create_action(bot.bot_id, target_symbol, side,
-				randi_range(50, 200), current_price)
+			# 激进交易者：大额交易 + Boss 入场时跟随 Boss 方向
+			action = _aggressive_action(bot, target_symbol, current_price)
 
 	if not action.is_empty():
 		bot_action_executed.emit(bot.bot_id, action)
+
+
+## 趋势跟踪者：最近 N tick 价格持续上涨才买，持续下跌才卖
+func _trend_follower_action(bot: BotState, symbol: StringName, price: float) -> Dictionary:
+	if not bot.price_history.has(symbol):
+		return {}
+	var history: Array = bot.price_history[symbol]
+	if history.size() < TREND_WINDOW:
+		return {}  # 数据不足，观望
+
+	# 检查最近 TREND_WINDOW 条价格是否单调递增/递减
+	var recent: Array = history.slice(history.size() - TREND_WINDOW)
+	var rising := true
+	var falling := true
+	for i in range(1, recent.size()):
+		if recent[i] <= recent[i - 1]:
+			rising = false
+		if recent[i] >= recent[i - 1]:
+			falling = false
+
+	if rising:
+		# 持续上涨 → 买入
+		return _create_action(bot.bot_id, symbol, GameEnums.OrderSide.BUY,
+			randi_range(10, 50), price)
+	elif falling:
+		# 持续下跌 → 卖出
+		return _create_action(bot.bot_id, symbol, GameEnums.OrderSide.SELL,
+			randi_range(10, 50), price)
+	# 无明显趋势 → 不行动
+	return {}
+
+
+## 逆向投资者：价格偏离基准价 >X% 才操作
+func _contrarian_action(bot: BotState, symbol: StringName, price: float) -> Dictionary:
+	var base_price: float = _base_prices.get(symbol, price)
+	if base_price <= 0.0:
+		return {}
+	var deviation := (price - base_price) / base_price
+
+	if deviation < -CONTRARIAN_DEVIATION:
+		# 价格低于基准价 >X% → 抄底买入
+		var qty := int(5 + abs(deviation) * 200)  # 偏离越多买越多
+		return _create_action(bot.bot_id, symbol, GameEnums.OrderSide.BUY,
+			clampi(qty, 5, 40), price)
+	elif deviation > CONTRARIAN_DEVIATION:
+		# 价格高于基准价 >X% → 高位卖出
+		var qty := int(5 + abs(deviation) * 200)
+		return _create_action(bot.bot_id, symbol, GameEnums.OrderSide.SELL,
+			clampi(qty, 5, 40), price)
+	# 偏离不足 → 观望
+	return {}
+
+
+## 噪音交易者：随机买卖，但有暂停观望概率
+func _noise_trader_action(bot: BotState, symbol: StringName, price: float) -> Dictionary:
+	if randf() < NOISE_PAUSE_CHANCE:
+		return {}  # 散户观望中
+	var side := GameEnums.OrderSide.BUY if randf() < 0.5 else GameEnums.OrderSide.SELL
+	return _create_action(bot.bot_id, symbol, side,
+		randi_range(1, 20), price)
+
+
+## 激进交易者：大额交易 + Boss 入场时跟随 Boss 方向
+func _aggressive_action(bot: BotState, symbol: StringName, price: float) -> Dictionary:
+	var side: int
+	if _boss and _boss.is_active and randf() < AGGRESSIVE_BOSS_FOLLOW_CHANCE:
+		# 跟随 Boss 方向
+		side = GameEnums.OrderSide.BUY if _boss.config.direction_bias > 0 else GameEnums.OrderSide.SELL
+	else:
+		side = GameEnums.OrderSide.BUY if randf() < 0.5 else GameEnums.OrderSide.SELL
+	return _create_action(bot.bot_id, symbol, side,
+		randi_range(50, 200), price)
 
 
 ## Boss 交易
