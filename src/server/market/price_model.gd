@@ -9,6 +9,8 @@ class_name PriceModel
 ## 单只股票的价格状态
 class StockPriceState:
 	var symbol: StringName = &""
+	var stock_name: String = ""     ## 股票显示名称（如“恒基地产”）
+	var sector: String = ""         ## 股票板块（如 "realestate"）
 	var current_price: float = 0.0
 	var open_price: float = 0.0
 	var high_price: float = 0.0
@@ -62,6 +64,8 @@ func initialize_stocks(stock_configs: Array[Dictionary]) -> void:
 	for cfg in stock_configs:
 		var state := StockPriceState.new()
 		state.symbol = StringName(cfg.get("symbol", ""))
+		state.stock_name = cfg.get("name", "")
+		state.sector = cfg.get("sector", "")
 		state.reset(
 			cfg.get("base_price", 100.0),
 			cfg.get("volatility", 0.02)
@@ -172,6 +176,8 @@ func _apply_news_impact(state: StockPriceState, impact: Dictionary) -> void:
 func _build_snapshot(state: StockPriceState) -> MarketTypes.StockSnapshot:
 	var snap := MarketTypes.StockSnapshot.new()
 	snap.symbol = state.symbol
+	snap.name = state.stock_name
+	snap.sector = state.sector
 	snap.open = state.open_price
 	snap.high = state.high_price
 	snap.low = state.low_price
