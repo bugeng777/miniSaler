@@ -72,16 +72,40 @@ func submit_order(player_id: int, symbol: StringName, side: int,
 	return order_id
 
 
-## 市价单撮合
+## 市价单撮合（逐档吃单，支持滑价）
+## BUY: 从 ask 侧逐档吃单；SELL: 从 bid 侧逐档吃单
+## 如果订单簿为空则 fallback 到当前市价成交
 func _match_market_order(order: MarketTypes.BookOrder) -> void:
-	if not _current_prices.has(order.symbol):
-		order_rejected.emit(order.order_id, "No price available")
+	if not _books.has(order.symbol):
+		order_rejected.emit(order.order_id, "Unknown symbol: " + str(order.symbol))
 		return
 
-	var fill_price := _current_prices[order.symbol]
-	# 市价单全部成交（简化模型：无流动性限制）
-	order.remaining = 0
-	order_filled.emit(order, fill_price, order.quantity)
+	var book: BookSide = _books[order.symbol]
+	var is_buy := order.side == GameEnums.OrderSide.BUY
+	var opposite_side: Array[MarketTypes.BookOrder] = book.asks if is_buy else book.bids
+
+	# 逐档撮合
+	while order.remaining > 0 and opposite_side.size() > 0:
+		var best: MarketTypes.BookOrder = opposite_side[0]
+		var fill_qty := mini(order.remaining, best.remaining)
+		best.remaining -= fill_qty
+		order.remaining -= fill_qty
+		if order.remaining > 0:
+			order_partially_filled.emit(order, best.price, fill_qty)
+		else:
+			order_filled.emit(order, best.price, fill_qty)
+		if best.remaining <= 0:
+			opposite_side.pop_front()
+
+	# 订单簿无挂单时 fallback 到当前市价成交
+	if order.remaining > 0:
+		if _current_prices.has(order.symbol):
+			var fallback_price := _current_prices[order.symbol]
+			var remaining_qty := order.remaining
+			order.remaining = 0
+			order_filled.emit(order, fallback_price, remaining_qty)
+		else:
+			order_rejected.emit(order.order_id, "No price available and order book empty")
 
 
 ## 限价单撮合
