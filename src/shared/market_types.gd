@@ -137,7 +137,20 @@ class TradeRecord:
 		return {
 			"trade_id": trade_id,
 			"symbol": symbol,
+			"buy_order_id": buy_order_id,
+			"sell_order_id": sell_order_id,
 			"price": price,
 			"quantity": quantity,
 			"timestamp": timestamp,
 		}
+
+	static func from_dict(data: Dictionary) -> TradeRecord:
+		var record := TradeRecord.new()
+		record.trade_id = data.get("trade_id", "")
+		record.symbol = StringName(data.get("symbol", ""))
+		record.buy_order_id = data.get("buy_order_id", "")
+		record.sell_order_id = data.get("sell_order_id", "")
+		record.price = data.get("price", 0.0)
+		record.quantity = data.get("quantity", 0)
+		record.timestamp = data.get("timestamp", 0.0)
+		return record
