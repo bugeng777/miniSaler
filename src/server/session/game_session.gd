@@ -37,6 +37,8 @@ var _server_peer: ENetMultiplayerPeer = null
 
 var _settlement_triggered: bool = false  ## 防止重复结算
 var _tick_count: int = 0  ## 市场 tick 计数器
+var _ready_players: Dictionary = {}  ## player_id -> bool，多人模式准备状态
+var _prev_snapshots: Dictionary = {}  ## {symbol: StockSnapshot} 上一帧快照，用于增量广播
 
 
 func _ready() -> void:
@@ -85,7 +87,8 @@ func stop_server() -> void:
 
 func goto_era_select() -> void:
 	_settlement_triggered = false
-	# 清理本局数据
+	_ready_players.clear()
+	_prev_snapshots.clear()
 	if player_manager:
 		player_manager.clear_all()
 	_set_phase(GameEnums.GamePhase.ERA_SELECT, {})
@@ -106,20 +109,18 @@ func goto_enter_market() -> void:
 		news_system.start(_current_era.era_id)
 	if extraction_engine:
 		extraction_engine.start(_current_era.extraction_config)
-	# 获取股票符号列表
 	var symbols: Array[StringName] = []
 	for cfg in _current_era.stock_configs:
 		symbols.append(StringName(cfg.get("symbol", "")))
 	if bot_manager:
 		bot_manager.start(_current_era, symbols)
-		# 注册 Bot 到 PlayerManager
 		if player_manager:
 			for bot_info in bot_manager.get_bot_info_list():
 				player_manager.register_player(
 					bot_info["bot_id"],
 					bot_info["name"],
 					bot_info.get("cash", 100_000.0),
-					true)  # is_bot = true
+					true)
 
 
 func goto_trading() -> void:
@@ -147,7 +148,6 @@ func goto_settlement() -> void:
 
 ## ─── Host 模式直连方法（由 main.gd 调用，不经过 RPC）─────────────────────
 
-## Host 选择时代
 func host_select_era(era_id: StringName) -> void:
 	if era_manager:
 		_current_era = era_manager.set_current_era(era_id)
@@ -155,27 +155,23 @@ func host_select_era(era_id: StringName) -> void:
 			goto_loadout(_current_era)
 
 
-## Host 准备完成，开始游戏
 func host_start_game() -> void:
 	_settlement_triggered = false
 	_tick_count = 0
-	_loadout_timer.stop()  # 取消自动超时
+	_prev_snapshots.clear()
+	_loadout_timer.stop()
 	goto_enter_market()
-	# 短暂延迟后进入交易
 	get_tree().create_timer(1.5).timeout.connect(func() -> void:
 		goto_trading()
 	)
 
 
-## Host 提交订单
 func host_submit_order(player_id: int, symbol: StringName, side: int,
 		order_type: int, quantity: int, limit_price: float = 0.0) -> void:
 	if market_engine:
 		market_engine.submit_order(player_id, symbol, side, order_type, quantity, limit_price)
-	# 订单成交后通过 market_engine.tick_complete → _on_market_tick 广播更新
 
 
-## Host 请求撤离
 func host_request_extraction(player_id: int) -> void:
 	if extraction_engine and player_manager:
 		var state := player_manager.get_player_state(player_id)
@@ -195,13 +191,10 @@ func _on_trading_tick() -> void:
 	if _trading_remaining <= 0.0:
 		goto_settlement()
 		return
-	# 更新撤离引擎
 	if extraction_engine:
 		extraction_engine.update(1.0)
-	# 更新技能冷却
 	if skill_system:
 		skill_system.update_cooldowns(1.0)
-	# 更新 Bot
 	if bot_manager and market_engine:
 		var prices := market_engine.get_current_snapshot()
 		var price_dict: Dictionary = {}
@@ -210,7 +203,6 @@ func _on_trading_tick() -> void:
 		bot_manager.update(1.0, price_dict)
 
 
-## 准备阶段超时（自动进入）
 func _on_loadout_timeout() -> void:
 	goto_enter_market()
 	get_tree().create_timer(2.0).timeout.connect(func() -> void:
@@ -223,12 +215,10 @@ func connect_subsystem_signals() -> void:
 	if market_engine:
 		market_engine.tick_complete.connect(_on_market_tick)
 		market_engine.circuit_breaker_triggered.connect(_on_circuit_breaker)
-		# 连接订单成交信号到玩家管理器
-		var ob := market_engine.get_order_book()
-		if ob and player_manager:
-			ob.order_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
-				player_manager.on_order_filled(order.player_id, order.order_id, fill_price, fill_qty)
-			)
+		# MD-04 修复: 不再直接访问 OrderBook 内部组件
+		# 改为连接 MarketEngine 自身转发的 order_filled_passthrough 信号
+		if market_engine.has_signal("order_filled_passthrough") and player_manager:
+			market_engine.connect("order_filled_passthrough", _on_order_filled_passthrough)
 	if extraction_engine:
 		extraction_engine.extraction_window_opened.connect(_on_extraction_window_opened)
 		extraction_engine.extraction_window_closed.connect(_on_extraction_window_closed)
@@ -250,30 +240,40 @@ func connect_subsystem_signals() -> void:
 ## ─── 子系统事件处理（广播到 UI）───────────────────────────────────────────
 
 func _on_market_tick(snapshots: Array, fear_greed_index: float) -> void:
-	# 更新玩家持仓盈亏
 	if player_manager:
 		var prices: Dictionary = {}
 		for snap in snapshots:
 			if snap is MarketTypes.StockSnapshot:
 				prices[snap.symbol] = snap.close
 		player_manager.update_prices(prices)
-		# 检查每个玩家是否爆仓
 		for snap in player_manager.get_all_snapshots():
 			if snap.total_assets <= 0.0:
 				if extraction_engine:
 					extraction_engine.trigger_bust(snap.player_id)
-	# 构建广播数据
 	_tick_count += 1
 	var tick_data := MarketTypes.TickData.new()
 	tick_data.tick_index = _tick_count
 	tick_data.elapsed_time = _tick_count * Constants.TICK_INTERVAL
 	tick_data.snapshots.assign(snapshots)
 	tick_data.fear_greed_index = fear_greed_index
-	_broadcast(NetworkProtocol.build_market_tick_msg(tick_data))
+	# 每 10 tick 全量广播（防漂移），其余发送增量
+	if _tick_count % 10 == 0 or _prev_snapshots.is_empty():
+		_broadcast(NetworkProtocol.build_market_tick_msg(tick_data))
+	else:
+		_broadcast(NetworkProtocol.build_market_tick_delta(_prev_snapshots, tick_data))
+	_prev_snapshots.clear()
+	for snap in tick_data.snapshots:
+		_prev_snapshots[snap.symbol] = snap
 
 
 func _on_circuit_breaker(symbol: StringName, duration: float) -> void:
 	_broadcast({"msg_type": &"circuit_breaker", "symbol": symbol, "duration": duration})
+
+
+## MarketEngine 转发订单成交通知（替代直接访问 OrderBook）
+func _on_order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+	if player_manager:
+		player_manager.on_order_filled(order.player_id, order.order_id, fill_price, fill_qty)
 
 
 func _on_extraction_window_opened(duration: float) -> void:
@@ -285,14 +285,12 @@ func _on_extraction_window_closed() -> void:
 
 
 func _on_player_extracted(player_id: int, profit: float) -> void:
-	# 撤离成功后直接进入结算
 	goto_settlement()
 
 
 func _on_player_busted(player_id: int) -> void:
 	if player_manager:
 		player_manager.force_liquidate(player_id)
-	# 爆仓后进入结算
 	goto_settlement()
 
 
@@ -304,7 +302,6 @@ func _on_news_generated(event: Dictionary) -> void:
 		event.get("sentiment", GameEnums.NewsSentiment.NEUTRAL),
 		StringName(event.get("symbol", ""))
 	))
-	# 新闻冲击注入市场引擎
 	if market_engine and event.get("symbol", "") != "":
 		market_engine.inject_news_impact(StringName(event["symbol"]), event)
 
@@ -327,7 +324,6 @@ func _on_skill_cooldown_updated(player_id: int, skill_id: StringName, remaining:
 
 
 func _on_boss_entered(boss_name: String, boss_data: Dictionary) -> void:
-	# 注册 Boss 到 PlayerManager
 	const BOSS_ID := 999
 	if player_manager:
 		var capital: float = boss_data.get("capital", 500_000.0)
@@ -341,7 +337,6 @@ func _on_bust_detected(player_id: int) -> void:
 		extraction_engine.trigger_bust(player_id)
 
 
-## Bot 行为转发：Bot 下单 → MarketEngine
 func _on_bot_action(bot_id: int, action: Dictionary) -> void:
 	if market_engine:
 		var symbol := StringName(action.get("symbol", ""))
@@ -353,9 +348,20 @@ func _on_bot_action(bot_id: int, action: Dictionary) -> void:
 
 ## ─── RPC 接收客户端请求（多人模式）──────────────────────────────────────────
 
+func _validate_peer(peer_id: int) -> bool:
+	if not _has_enet:
+		return true
+	if peer_id <= 0:
+		return false
+	return peer_id in multiplayer.get_peers()
+
+
 @rpc("any_peer", "call_local")
 func rpc_submit_order(data: Dictionary) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_submit_order" % pid)
+		return
 	host_submit_order(pid,
 		StringName(data.get("symbol", "")),
 		data.get("side", GameEnums.OrderSide.BUY),
@@ -367,24 +373,37 @@ func rpc_submit_order(data: Dictionary) -> void:
 @rpc("any_peer", "call_local")
 func rpc_request_extraction() -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_request_extraction" % pid)
+		return
 	host_request_extraction(pid)
 
 
 @rpc("any_peer", "call_local")
 func rpc_activate_skill(skill_id: StringName) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_activate_skill" % pid)
+		return
 	if skill_system:
 		skill_system.activate_skill(pid, skill_id)
 
 
 @rpc("any_peer", "call_local")
 func rpc_select_era(era_id: StringName) -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_select_era" % pid)
+		return
 	host_select_era(era_id)
 
 
 @rpc("any_peer", "call_local")
 func rpc_configure_loadout(data: Dictionary) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_configure_loadout" % pid)
+		return
 	var extra_funds: float = data.get("extra_funds", 0.0)
 	var skill_ids: Array = data.get("skill_ids", [])
 	if player_manager:
@@ -397,6 +416,76 @@ func rpc_configure_loadout(data: Dictionary) -> void:
 		skill_system.equip_skills(pid, typed_ids)
 
 
+@rpc("any_peer", "call_local")
+func rpc_player_ready() -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_player_ready" % pid)
+		return
+	_ready_players[pid] = true
+	print("GameSession: Player %d is ready" % pid)
+	_broadcast(NetworkProtocol.build_player_ready_msg(pid, true))
+	_check_all_ready()
+
+
+@rpc("any_peer", "call_local")
+func rpc_chat_message(text: String) -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_chat_message" % pid)
+		return
+	var safe_text: String = text.substr(0, 200)
+	_broadcast(NetworkProtocol.build_chat_msg(pid, safe_text))
+
+
+@rpc("any_peer", "call_local")
+func rpc_request_state_sync() -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		push_warning("GameSession: Invalid peer_id %d in rpc_request_state_sync" % pid)
+		return
+	print("GameSession: State sync requested from peer %d" % pid)
+	rpc_id(pid, "rpc_sync_data", NetworkProtocol.build_game_phase_msg(_current_phase, {}))
+	if _current_phase == GameEnums.GamePhase.TRADING and market_engine:
+		var snap := market_engine.get_current_snapshot()
+		var tick_data := MarketTypes.TickData.new()
+		tick_data.tick_index = _tick_count
+		tick_data.elapsed_time = _tick_count * Constants.TICK_INTERVAL
+		for sym in snap:
+			var stock_snap := MarketTypes.StockSnapshot.new()
+			stock_snap.symbol = StringName(sym)
+			stock_snap.close = snap[sym].get("price", 0.0)
+			tick_data.snapshots.append(stock_snap)
+		rpc_id(pid, "rpc_sync_data", NetworkProtocol.build_market_tick_msg(tick_data))
+	if player_manager:
+		var player_snap := player_manager.get_player_snapshot(pid)
+		if player_snap:
+			rpc_id(pid, "rpc_sync_data", {
+				"msg_type": NetworkProtocol.MSG_PLAYER_STATE,
+				"data": player_snap.to_dict(),
+			})
+
+
+func _check_all_ready() -> void:
+	if not _has_enet:
+		return
+	var peers := multiplayer.get_peers()
+	if peers.is_empty():
+		return
+	for peer_id in peers:
+		if not _ready_players.get(peer_id, false):
+			return
+	print("GameSession: All players ready, starting game")
+	_settlement_triggered = false
+	_tick_count = 0
+	_prev_snapshots.clear()
+	_ready_players.clear()
+	goto_enter_market()
+	get_tree().create_timer(1.5).timeout.connect(func() -> void:
+		goto_trading()
+	)
+
+
 ## ─── 网络事件 ────────────────────────────────────────────────────────────────
 func _on_peer_connected(peer_id: int) -> void:
 	print("GameSession: Peer connected: %d" % peer_id)
@@ -404,21 +493,19 @@ func _on_peer_connected(peer_id: int) -> void:
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	print("GameSession: Peer disconnected: %d" % peer_id)
+	_ready_players.erase(peer_id)
 
 
 ## ─── 广播 ────────────────────────────────────────────────────────────────────
 func _broadcast(msg: Dictionary) -> void:
 	if not _is_host:
 		return
-	# ENet 模式下向远程客户端广播
 	if _has_enet:
 		for peer_id in multiplayer.get_peers():
 			rpc_id(peer_id, "rpc_sync_data", msg)
-	# 本地 Host 通过信号接收
 	data_received.emit(msg)
 
 
-## RPC 方法：服务器向客户端发送数据
 @rpc("authority", "call_remote")
 func rpc_sync_data(msg: Dictionary) -> void:
 	data_received.emit(msg)
@@ -428,7 +515,6 @@ func rpc_sync_data(msg: Dictionary) -> void:
 func _set_phase(phase: int, data: Dictionary) -> void:
 	_current_phase = phase
 	phase_changed.emit(phase, data)
-	# 阶段变更也通过广播发送
 	if phase != GameEnums.GamePhase.ERA_SELECT:
 		_broadcast(NetworkProtocol.build_game_phase_msg(phase, data))
 
@@ -444,12 +530,10 @@ func _build_settlement_data() -> Dictionary:
 			var result := extraction_engine.get_result(snap.player_id) if extraction_engine else GameEnums.ExtractionResult.NONE
 			d["extraction_result"] = result
 			snapshots.append(d)
-			# 找到玩家（非 Bot）的数据
 			if snap.player_id == 1 or not snap.player_id >= 100:
 				player_extracted = (result == GameEnums.ExtractionResult.SUCCESS)
 				player_profit = snap.session_profit
 				player_rank_points = snap.rank_points
-	# 计算段位变化
 	var rank_delta := 0
 	if rank_system:
 		rank_delta = rank_system.calculate_rank_change(player_profit, player_extracted)
