@@ -114,11 +114,13 @@ func send_configure_loadout(extra_funds: float, skill_ids: Array) -> void:
 		})
 
 
+@rpc("any_peer", "call_remote")
 func send_player_ready() -> void:
 	if _is_connected:
 		rpc_id(1, "rpc_player_ready")
 
 
+@rpc("any_peer", "call_remote")
 func send_chat_message(text: String) -> void:
 	if _is_connected:
 		rpc_id(1, "rpc_chat_message", text)
