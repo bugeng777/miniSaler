@@ -187,3 +187,65 @@ func get_all_snapshots() -> Array[PlayerTypes.PlayerSnapshot]:
 func clear_all() -> void:
 	_players.clear()
 	_current_prices.clear()
+
+
+## ─── 破产保护机制 ─────────────────────────────────────────────────────────────
+
+## 低保检查：总资金 < $5,000 且距上次低保 > 24h → 补充至 $10,000
+func check_welfare(profile: PlayerTypes.PlayerProfile) -> float:
+	if profile.total_funds >= Constants.WELFARE_TRIGGER:
+		return 0.0
+	if profile.last_welfare_time != "":
+		var last_time := Time.get_datetime_dict_from_datetime_string(profile.last_welfare_time)
+		var now := Time.get_datetime_dict_from_system()
+		var hours_diff := _hours_between(last_time, now)
+		if hours_diff < Constants.WELFARE_COOLDOWN_HOURS:
+			return 0.0
+	var refill := Constants.WELFARE_REFILL - profile.total_funds
+	push_warning("PlayerManager: Welfare triggered — supplementing $%.2f" % refill)
+	return refill
+
+
+## 新手保护：前 10 局爆仓时保留 30% 损失
+func apply_newbie_protection(profile: PlayerTypes.PlayerProfile, session_loss: float) -> float:
+	if profile.total_games > Constants.NEWBIE_PROTECTION_GAMES:
+		return 0.0
+	if session_loss <= 0.0:
+		return 0.0
+	var protected_amount := session_loss * Constants.NEWBIE_PROTECTION_RATIO
+	push_warning("PlayerManager: Newbie protection — saving $%.2f of $%.2f loss" % [protected_amount, session_loss])
+	return protected_amount
+
+
+## 辅助：计算两个时间字典之间的小时差
+func _hours_between(from: Dictionary, to: Dictionary) -> float:
+	var from_unix := Time.get_unix_time_from_datetime_dict(from)
+	var to_unix := Time.get_unix_time_from_datetime_dict(to)
+	return (to_unix - from_unix) / 3600.0
+
+
+## ─── 经验值系统 ───────────────────────────────────────────────────────────────
+
+## 计算本局经验值
+static func calculate_session_exp(profit: float, extracted: bool, trades_count: int) -> int:
+	var exp := 0
+	exp += trades_count * 5
+	if profit > 0.0:
+		exp += int(profit / 100.0)
+	if extracted:
+		exp += 50
+	return exp
+
+
+## 应用经验值并处理升级
+func apply_experience(player_id: int, profile: PlayerTypes.PlayerProfile, exp_gained: int) -> Dictionary:
+	profile.player_exp += exp_gained
+	var leveled_up := false
+	var new_level := profile.player_level
+	while profile.player_exp >= profile.player_level * 100:
+		profile.player_exp -= profile.player_level * 100
+		profile.player_level += 1
+		new_level = profile.player_level
+		leveled_up = true
+		level_up.emit(player_id, new_level)
+	return {"leveled_up": leveled_up, "new_level": new_level, "exp_gained": exp_gained}
