@@ -57,6 +57,7 @@ func is_connected() -> bool:
 ## ─── 发送到服务器的 RPC 方法 ──────────────────────────────────────────────
 
 ## 提交订单
+@rpc("any_peer", "call_remote")
 func send_submit_order(symbol: StringName, side: int, order_type: int,
 		quantity: int, limit_price: float = 0.0) -> void:
 	if _is_connected:
@@ -70,24 +71,28 @@ func send_submit_order(symbol: StringName, side: int, order_type: int,
 
 
 ## 请求撤离
+@rpc("any_peer", "call_remote")
 func send_request_extraction() -> void:
 	if _is_connected:
 		rpc_id(1, "rpc_request_extraction")
 
 
 ## 激活技能
+@rpc("any_peer", "call_remote")
 func send_activate_skill(skill_id: StringName) -> void:
 	if _is_connected:
 		rpc_id(1, "rpc_activate_skill", skill_id)
 
 
 ## 选择时代
+@rpc("any_peer", "call_remote")
 func send_select_era(era_id: StringName) -> void:
 	if _is_connected:
 		rpc_id(1, "rpc_select_era", era_id)
 
 
 ## 配置准备
+@rpc("any_peer", "call_remote")
 func send_configure_loadout(extra_funds: float, skill_ids: Array) -> void:
 	if _is_connected:
 		rpc_id(1, "rpc_configure_loadout", {
@@ -98,8 +103,9 @@ func send_configure_loadout(extra_funds: float, skill_ids: Array) -> void:
 
 ## ─── 接收服务器广播 ──────────────────────────────────────────────────────────
 
-@rpc("authority", "call_local")
-func sync_data(msg: Dictionary) -> void:
+## 统一广播通道（方法名与 GameSession.rpc_sync_data 一致）
+@rpc("authority", "call_remote")
+func rpc_sync_data(msg: Dictionary) -> void:
 	var msg_type: StringName = msg.get("msg_type", &"")
 	match msg_type:
 		NetworkProtocol.MSG_MARKET_TICK:
