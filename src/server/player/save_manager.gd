@@ -52,7 +52,10 @@ func load_safe_box() -> Dictionary:
 	if not file:
 		return {"slots": Constants.INITIAL_SAFE_BOX_SLOTS, "items": []}
 	var json := JSON.new()
-	json.parse(file.get_as_text())
+	if json.parse(file.get_as_text()) != OK:
+		push_warning("SaveManager: Failed to parse safe_box JSON")
+		file.close()
+		return {"slots": Constants.INITIAL_SAFE_BOX_SLOTS, "items": []}
 	file.close()
 	return json.data if json.data else {"slots": Constants.INITIAL_SAFE_BOX_SLOTS, "items": []}
 
@@ -71,7 +74,10 @@ func load_skill_progress() -> Dictionary:
 	if not file:
 		return {}
 	var json := JSON.new()
-	json.parse(file.get_as_text())
+	if json.parse(file.get_as_text()) != OK:
+		push_warning("SaveManager: Failed to parse skill_progress JSON")
+		file.close()
+		return {}
 	file.close()
 	return json.data if json.data else {}
 
