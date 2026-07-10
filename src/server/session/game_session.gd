@@ -37,6 +37,8 @@ var _server_peer: ENetMultiplayerPeer = null
 
 var _settlement_triggered: bool = false  ## 防止重复结算
 var _tick_count: int = 0  ## 市场 tick 计数器
+var _ready_players: Dictionary = {}
+var _prev_snapshots: Dictionary = {}
 
 
 func _ready() -> void:
@@ -85,6 +87,8 @@ func stop_server() -> void:
 
 func goto_era_select() -> void:
 	_settlement_triggered = false
+	_ready_players.clear()
+	_prev_snapshots.clear()
 	# 清理本局数据
 	if player_manager:
 		player_manager.clear_all()
@@ -159,6 +163,7 @@ func host_select_era(era_id: StringName) -> void:
 func host_start_game() -> void:
 	_settlement_triggered = false
 	_tick_count = 0
+	_prev_snapshots.clear()
 	_loadout_timer.stop()  # 取消自动超时
 	goto_enter_market()
 	# 短暂延迟后进入交易
@@ -223,12 +228,9 @@ func connect_subsystem_signals() -> void:
 	if market_engine:
 		market_engine.tick_complete.connect(_on_market_tick)
 		market_engine.circuit_breaker_triggered.connect(_on_circuit_breaker)
-		# 连接订单成交信号到玩家管理器
-		var ob := market_engine.get_order_book()
-		if ob and player_manager:
-			ob.order_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
-				player_manager.on_order_filled(order.player_id, order.order_id, fill_price, fill_qty)
-			)
+		# MD-04: 改用 MarketEngine passthrough 信号
+		if market_engine.has_signal("order_filled_passthrough") and player_manager:
+			market_engine.connect("order_filled_passthrough", _on_order_filled_passthrough)
 	if extraction_engine:
 		extraction_engine.extraction_window_opened.connect(_on_extraction_window_opened)
 		extraction_engine.extraction_window_closed.connect(_on_extraction_window_closed)
@@ -269,11 +271,22 @@ func _on_market_tick(snapshots: Array, fear_greed_index: float) -> void:
 	tick_data.elapsed_time = _tick_count * Constants.TICK_INTERVAL
 	tick_data.snapshots.assign(snapshots)
 	tick_data.fear_greed_index = fear_greed_index
-	_broadcast(NetworkProtocol.build_market_tick_msg(tick_data))
+	if _tick_count % 10 == 0 or _prev_snapshots.is_empty():
+		_broadcast(NetworkProtocol.build_market_tick_msg(tick_data))
+	else:
+		_broadcast(NetworkProtocol.build_market_tick_delta(_prev_snapshots, tick_data))
+	_prev_snapshots.clear()
+	for snap in tick_data.snapshots:
+		_prev_snapshots[snap.symbol] = snap
 
 
 func _on_circuit_breaker(symbol: StringName, duration: float) -> void:
 	_broadcast({"msg_type": &"circuit_breaker", "symbol": symbol, "duration": duration})
+
+
+func _on_order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+	if player_manager:
+		player_manager.on_order_filled(order.player_id, order.order_id, fill_price, fill_qty)
 
 
 func _on_extraction_window_opened(duration: float) -> void:
@@ -353,9 +366,16 @@ func _on_bot_action(bot_id: int, action: Dictionary) -> void:
 
 ## ─── RPC 接收客户端请求（多人模式）──────────────────────────────────────────
 
+func _validate_peer(peer_id: int) -> bool:
+	if not _has_enet: return true
+	if peer_id <= 0: return false
+	return peer_id in multiplayer.get_peers()
+
+
 @rpc("any_peer", "call_local")
 func rpc_submit_order(data: Dictionary) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	host_submit_order(pid,
 		StringName(data.get("symbol", "")),
 		data.get("side", GameEnums.OrderSide.BUY),
@@ -367,24 +387,29 @@ func rpc_submit_order(data: Dictionary) -> void:
 @rpc("any_peer", "call_local")
 func rpc_request_extraction() -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	host_request_extraction(pid)
 
 
 @rpc("any_peer", "call_local")
 func rpc_activate_skill(skill_id: StringName) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	if skill_system:
 		skill_system.activate_skill(pid, skill_id)
 
 
 @rpc("any_peer", "call_local")
 func rpc_select_era(era_id: StringName) -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	host_select_era(era_id)
 
 
 @rpc("any_peer", "call_local")
 func rpc_configure_loadout(data: Dictionary) -> void:
 	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
 	var extra_funds: float = data.get("extra_funds", 0.0)
 	var skill_ids: Array = data.get("skill_ids", [])
 	if player_manager:
@@ -397,6 +422,58 @@ func rpc_configure_loadout(data: Dictionary) -> void:
 		skill_system.equip_skills(pid, typed_ids)
 
 
+@rpc("any_peer", "call_local")
+func rpc_player_ready() -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
+	_ready_players[pid] = true
+	_broadcast(NetworkProtocol.build_player_ready_msg(pid, true))
+	_check_all_ready()
+
+
+@rpc("any_peer", "call_local")
+func rpc_chat_message(text: String) -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
+	_broadcast(NetworkProtocol.build_chat_msg(pid, text.substr(0, 200)))
+
+
+@rpc("any_peer", "call_local")
+func rpc_request_state_sync() -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid): return
+	rpc_id(pid, "rpc_sync_data", NetworkProtocol.build_game_phase_msg(_current_phase, {}))
+	if _current_phase == GameEnums.GamePhase.TRADING and market_engine:
+		var snap := market_engine.get_current_snapshot()
+		var td := MarketTypes.TickData.new()
+		td.tick_index = _tick_count
+		td.elapsed_time = _tick_count * Constants.TICK_INTERVAL
+		for sym in snap:
+			var s := MarketTypes.StockSnapshot.new()
+			s.symbol = StringName(sym)
+			s.close = snap[sym].get("price", 0.0)
+			td.snapshots.append(s)
+		rpc_id(pid, "rpc_sync_data", NetworkProtocol.build_market_tick_msg(td))
+	if player_manager:
+		var ps := player_manager.get_player_snapshot(pid)
+		if ps:
+			rpc_id(pid, "rpc_sync_data", {"msg_type": NetworkProtocol.MSG_PLAYER_STATE, "data": ps.to_dict()})
+
+
+func _check_all_ready() -> void:
+	if not _has_enet: return
+	var peers := multiplayer.get_peers()
+	if peers.is_empty(): return
+	for peer_id in peers:
+		if not _ready_players.get(peer_id, false): return
+	_settlement_triggered = false
+	_tick_count = 0
+	_prev_snapshots.clear()
+	_ready_players.clear()
+	goto_enter_market()
+	get_tree().create_timer(1.5).timeout.connect(func(): goto_trading())
+
+
 ## ─── 网络事件 ────────────────────────────────────────────────────────────────
 func _on_peer_connected(peer_id: int) -> void:
 	print("GameSession: Peer connected: %d" % peer_id)
@@ -404,6 +481,7 @@ func _on_peer_connected(peer_id: int) -> void:
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	print("GameSession: Peer disconnected: %d" % peer_id)
+	_ready_players.erase(peer_id)
 
 
 ## ─── 广播 ────────────────────────────────────────────────────────────────────
