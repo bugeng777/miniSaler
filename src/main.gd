@@ -163,6 +163,7 @@ func _build_game_ui() -> void:
 	_ui_manager.register_screen("trading", TradingScreen.new())
 	_ui_manager.register_screen("settlement", SettlementScreen.new())
 	_ui_manager.register_screen("profile", ProfileScreen.new())
+	_ui_manager.register_screen("safe_box", SafeBoxScreen.new())
 
 	_ui_manager.show_screen("era_select")
 
@@ -337,6 +338,10 @@ func _on_data_received(msg: Dictionary) -> void:
 			_on_skill_state(msg)
 		NetworkProtocol.MSG_BOSS_EVENT:
 			_on_boss_event(msg)
+		NetworkProtocol.MSG_PASSIVE_EFFECTS:
+			_on_passive_effects(msg)
+		NetworkProtocol.MSG_ORDER_REJECTED:
+			_on_order_rejected(msg)
 
 
 func _on_market_tick(data: Dictionary) -> void:
@@ -445,7 +450,16 @@ func _persist_settlement(data: Dictionary) -> void:
 			_player_profile.highest_session_profit = profit
 	# 更新段位
 	var rank_delta: int = data.get("rank_delta", 0)
-	_player_profile.rank_points = maxi(0, _player_profile.rank_points + rank_delta)
+	if _rank_system:
+		var result := _rank_system.apply_rank_change(
+			HOST_PLAYER_ID,
+			_player_profile.rank_points,
+			_player_profile.rank_tier,
+			rank_delta)
+		_player_profile.rank_points = result.points
+		_player_profile.rank_tier = result.tier
+	else:
+		_player_profile.rank_points = maxi(0, _player_profile.rank_points + rank_delta)
 	# 检查成就解锁
 	if _achievement_system:
 		var session_result := {"extracted": extracted, "profit": profit}
