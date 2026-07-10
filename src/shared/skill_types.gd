@@ -97,6 +97,75 @@ class SkillRuntimeState:
 		}
 
 
+## ─── 技能效果契约（Phase 3 新增）──────────────────────────────────────────────
+## 每个技能触发后产生的效果数据结构，供 WS1/WS3/WS5 消费
+## effect_type 语义:
+##   "market_data"     — 需要 WS1 MarketEngine 提供数据（内在价值/大户持仓/MA交叉）
+##   "fund_modifier"   — 需要 WS3 PlayerManager 修改资金/持仓（利息/杠杆/爆仓保留）
+##   "order_modifier"  — 需要 WS3 修改订单执行逻辑（速度/批量/止损）
+##   "ui_display"      — 需要 WS5 在 UI 上显示（恐贪指数/信号/预警/他人方向）
+##   "extraction"      — 影响 ExtractionEngine 撤离窗口
+##   "social"          — 影响其他玩家（假消息/AI跟随）
+class SkillEffect:
+	var skill_id: StringName = &""
+	var effect_type: StringName = &""   ## 见上方枚举说明
+	var target: StringName = &""        ## 作用对象: "player" | "market" | "opponents" | "extraction" | "specific_stock"
+	var value: float = 0.0              ## 效果数值（语义随技能不同）
+	var duration: float = 0.0           ## 持续时间（秒），0 = 永久/瞬时
+
+	func to_dict() -> Dictionary:
+		return {
+			"skill_id": skill_id,
+			"effect_type": effect_type,
+			"target": target,
+			"value": value,
+			"duration": duration,
+		}
+
+	static func from_dict(data: Dictionary) -> SkillEffect:
+		var e := SkillEffect.new()
+		e.skill_id = StringName(data.get("skill_id", ""))
+		e.effect_type = StringName(data.get("effect_type", ""))
+		e.target = StringName(data.get("target", ""))
+		e.value = data.get("value", 0.0)
+		e.duration = data.get("duration", 0.0)
+		return e
+
+
+## 22 个技能的 SkillEffect 静态映射表（Phase 3 契约，CTO 冻结后不可变更）
+## 各组实现时需严格按此表的 effect_type / target / value 语义执行
+const ALL_SKILL_EFFECTS: Array[Dictionary] = [
+	# ─── 分析类（5）─────────────────────────────────────────
+	{"skill_id": "news_reader",      "effect_type": "market_data",    "target": "player",     "value": 2.0,  "duration": 0.0},
+	{"skill_id": "trend_insight",    "effect_type": "market_data",    "target": "market",     "value": 1.0,  "duration": 5.0},
+	{"skill_id": "sentiment_sense",  "effect_type": "ui_display",     "target": "player",     "value": 1.0,  "duration": 0.0},
+	{"skill_id": "fundamental_scan", "effect_type": "market_data",    "target": "market",     "value": 1.0,  "duration": 0.0},
+	{"skill_id": "whale_tracker",    "effect_type": "market_data",    "target": "market",     "value": 5.0,  "duration": 5.0},
+	# ─── 执行类（5）─────────────────────────────────────────
+	{"skill_id": "lightning_order",  "effect_type": "order_modifier", "target": "player",     "value": 2.0,  "duration": 3.0},
+	{"skill_id": "auto_stop_loss",   "effect_type": "order_modifier", "target": "specific_stock", "value": 0.05, "duration": 0.0},
+	{"skill_id": "batch_trade",      "effect_type": "order_modifier", "target": "player",     "value": 1.0,  "duration": 0.0},
+	{"skill_id": "momentum_hunter",  "effect_type": "ui_display",     "target": "market",     "value": 3.0,  "duration": 0.0},
+	{"skill_id": "short_expert",     "effect_type": "fund_modifier",  "target": "player",     "value": 0.2,  "duration": 0.0},
+	# ─── 防御类（5）─────────────────────────────────────────
+	{"skill_id": "iron_will",        "effect_type": "fund_modifier",  "target": "player",     "value": 0.1,  "duration": 0.0},
+	{"skill_id": "risk_warning",     "effect_type": "ui_display",     "target": "player",     "value": 30.0, "duration": 0.0},
+	{"skill_id": "safe_harbor",      "effect_type": "extraction",     "target": "extraction", "value": 10.0, "duration": 0.0},
+	{"skill_id": "diversify",        "effect_type": "order_modifier", "target": "player",     "value": 0.5,  "duration": 0.0},
+	{"skill_id": "cash_is_king",     "effect_type": "fund_modifier",  "target": "player",     "value": 0.001, "duration": 0.0},
+	# ─── 社交类（4）─────────────────────────────────────────
+	{"skill_id": "market_rumor",     "effect_type": "social",         "target": "opponents",  "value": 1.0,  "duration": 0.0},
+	{"skill_id": "herd_master",      "effect_type": "ui_display",     "target": "opponents",  "value": 5.0,  "duration": 5.0},
+	{"skill_id": "opinion_leader",   "effect_type": "social",         "target": "market",     "value": 1.0,  "duration": 0.0},
+	{"skill_id": "insider_network",  "effect_type": "market_data",    "target": "player",     "value": 1.0,  "duration": 0.0},
+	# ─── 激进类（3+1）───────────────────────────────────────
+	{"skill_id": "leverage_maniac",  "effect_type": "fund_modifier",  "target": "player",     "value": 3.0,  "duration": 0.0},
+	{"skill_id": "all_in",           "effect_type": "fund_modifier",  "target": "specific_stock", "value": 2.0, "duration": 0.0},
+	{"skill_id": "doom_gambler",     "effect_type": "fund_modifier",  "target": "player",     "value": 3.0,  "duration": 0.0},
+	{"skill_id": "reaper",           "effect_type": "fund_modifier",  "target": "player",     "value": 0.1,  "duration": 0.0},
+]
+
+
 ## 所有基础技能定义（静态注册表）
 ## SkillSystem 在初始化时加载此表
 const ALL_SKILLS: Array[Dictionary] = [

@@ -17,16 +17,22 @@ signal skill_cooldown_updated(player_id: int, skill_id: StringName, remaining: f
 ##   safe_harbor    : float — 撤离窗口延长秒数
 ##   diversify      : float — 持仓 >3 时手续费减免比例（如 0.5 = 减半）
 signal passive_effects_changed(player_id: int, modifiers: Dictionary)
+## Phase 3 新增：技能效果应用信号（供 WS1/WS3/WS5 连接）
+## effect 为 SkillTypes.SkillEffect 实例，含 effect_type/target/value/duration
+signal skill_effect_applied(player_id: int, skill_id: StringName, effect: Dictionary)
 
 
 ## 技能定义缓存
 var _skill_defs: Dictionary = {}  ## skill_id -> SkillTypes.SkillDef
+## 技能效果契约缓存
+var _skill_effects: Dictionary = {}  ## skill_id -> SkillTypes.SkillEffect
 ## 每个玩家的运行时技能状态
 var _player_skills: Dictionary = {}  ## player_id -> Dictionary(skill_id -> SkillTypes.SkillRuntimeState)
 
 
 func _ready() -> void:
 	_load_skill_definitions()
+	_load_skill_effects()
 
 
 ## 加载所有技能定义
@@ -35,6 +41,14 @@ func _load_skill_definitions() -> void:
 	for raw in SkillTypes.ALL_SKILLS:
 		var def := SkillTypes.SkillDef.from_dict(raw)
 		_skill_defs[def.skill_id] = def
+
+
+## 加载技能效果契约表（Phase 3）
+func _load_skill_effects() -> void:
+	_skill_effects.clear()
+	for raw in SkillTypes.ALL_SKILL_EFFECTS:
+		var eff := SkillTypes.SkillEffect.from_dict(raw)
+		_skill_effects[eff.skill_id] = eff
 
 
 ## 为玩家装备技能（准备阶段调用）
@@ -93,6 +107,10 @@ func activate_skill(player_id: int, skill_id: StringName) -> Dictionary:
 		state.effect_remaining = def.duration
 	var effect := {"skill_id": skill_id, "value": def.base_value, "duration": def.duration}
 	skill_activated.emit(player_id, skill_id, effect)
+	# Phase 3: 同时广播 SkillEffect 契约数据
+	if _skill_effects.has(skill_id):
+		var skill_eff: SkillTypes.SkillEffect = _skill_effects[skill_id]
+		skill_effect_applied.emit(player_id, skill_id, skill_eff.to_dict())
 	return effect
 
 
@@ -126,6 +144,16 @@ func get_player_skill_states(player_id: int) -> Array[Dictionary]:
 ## 获取技能定义
 func get_skill_def(skill_id: StringName) -> SkillTypes.SkillDef:
 	return _skill_defs.get(skill_id, null)
+
+
+## 获取技能效果契约（Phase 3，供其他子系统查询）
+func get_skill_effect(skill_id: StringName) -> SkillTypes.SkillEffect:
+	return _skill_effects.get(skill_id, null)
+
+
+## 获取所有技能效果契约表
+func get_all_skill_effects() -> Dictionary:
+	return _skill_effects
 
 
 ## 获取所有技能定义
