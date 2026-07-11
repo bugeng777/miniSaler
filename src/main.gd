@@ -471,33 +471,80 @@ func _on_boss_event(data: Dictionary) -> void:
 
 
 ## Phase 3 Task 3.3: SkillEffect 分发
+## 按 WS1/WS2/WS3/WS5 实际交付接口做细粒度路由
 func _on_skill_effect_applied(player_id: int, skill_id: StringName, effect: Dictionary) -> void:
 	var effect_type: StringName = StringName(effect.get("effect_type", ""))
 	var target: StringName = StringName(effect.get("target", ""))
 	var value: float = effect.get("value", 0.0)
 	var duration: float = effect.get("duration", 0.0)
-	match effect_type:
-		&"market_data":
-			if _market_engine and _market_engine.has_method("apply_skill_query"):
-				_market_engine.apply_skill_query(player_id, skill_id, target, value, duration)
-		&"fund_modifier":
-			if _player_manager and _player_manager.has_method("apply_fund_modifier"):
-				_player_manager.apply_fund_modifier(player_id, skill_id, target, value, duration)
-		&"order_modifier":
-			if _player_manager and _player_manager.has_method("apply_order_modifier"):
-				_player_manager.apply_order_modifier(player_id, skill_id, target, value, duration)
-		&"ui_display":
-			var trading := _find_screen("trading")
-			if trading is TradingScreen and trading.has_method("apply_skill_display"):
-				(trading as TradingScreen).apply_skill_display(skill_id, target, value, duration)
-		&"extraction":
-			if _extraction_engine and _extraction_engine.has_method("extend_window"):
-				_extraction_engine.extend_window(value)
-		&"social":
-			if _bot_manager and _bot_manager.has_method("apply_social_effect"):
-				_bot_manager.apply_social_effect(player_id, skill_id, target, value, duration)
-		_:
-			push_warning("Main: 未知 SkillEffect effect_type: " + str(effect_type))
+
+	# ─── market_data: 按 skill_id 路由到 WS1 查询接口 ───
+	if effect_type == &"market_data":
+		var display_data: Dictionary = {"skill_id": skill_id, "type": "market_data"}
+		var selected := _get_selected_symbol_for_skill()
+		if _market_engine:
+			match skill_id:
+				&"fundamental_scan":
+					display_data["intrinsic_value"] = _market_engine.get_intrinsic_value(selected)
+				&"whale_tracker":
+					display_data["whale_activity"] = _market_engine.get_whale_activity(selected)
+				&"trend_insight":
+					display_data["ma_cross_signal"] = _market_engine.get_ma_cross_signal(selected)
+				&"news_reader", &"insider_network":
+					# 通过 NewsSystem 减少延迟/插入独家新闻（WS2 范畴，此处仅标记）
+					display_data["info_boost"] = value
+		_send_skill_display(display_data)
+		return
+
+	# ─── ui_display: 直接转发给 WS5 ───
+	if effect_type == &"ui_display":
+		_send_skill_display({"skill_id": skill_id, "type": "ui_display", "value": value, "duration": duration})
+		return
+
+	# ─── fund_modifier / order_modifier: WS3 提供（防御性调用）───
+	if effect_type == &"fund_modifier":
+		if _player_manager and _player_manager.has_method("apply_fund_modifier"):
+			_player_manager.apply_fund_modifier(player_id, skill_id, target, value, duration)
+		return
+	if effect_type == &"order_modifier":
+		# 闪电下单类：走 WS1 的优先撮合通道（仅标记，实际下单时 OrderBook 检查 skill 状态）
+		if skill_id == &"lightning_order" and _market_engine and _market_engine.has_method("submit_order_priority"):
+			# submit_order_priority 由订单提交时触发，此处仅做激活标记
+			_send_skill_display({"skill_id": skill_id, "type": "order_modifier", "priority_active": true, "duration": duration})
+			return
+		# 其他 order_modifier（批量交易/分散投资）走 WS3
+		if _player_manager and _player_manager.has_method("apply_order_modifier"):
+			_player_manager.apply_order_modifier(player_id, skill_id, target, value, duration)
+		return
+
+	# ─── extraction: WS2 ExtractionEngine ───
+	if effect_type == &"extraction":
+		if _extraction_engine and _extraction_engine.has_method("extend_window"):
+			_extraction_engine.extend_window(value)
+		return
+
+	# ─── social: WS2 BotManager（防御性调用）───
+	if effect_type == &"social":
+		if _bot_manager and _bot_manager.has_method("apply_social_effect"):
+			_bot_manager.apply_social_effect(player_id, skill_id, target, value, duration)
+		return
+
+	push_warning("Main: 未知 SkillEffect effect_type: " + str(effect_type))
+
+
+## 获取当前交易屏幕选中的股票（market_data 技能的数据源）
+func _get_selected_symbol_for_skill() -> StringName:
+	var trading := _find_screen("trading")
+	if trading is TradingScreen:
+		return (trading as TradingScreen).get_selected_symbol()
+	return &""
+
+
+## 将技能效果数据转发给 WS5 的 TradingScreen / SkillOverlay 显示
+func _send_skill_display(data: Dictionary) -> void:
+	var trading := _find_screen("trading")
+	if trading is TradingScreen and trading.has_method("apply_skill_display"):
+		(trading as TradingScreen).apply_skill_display(data)
 
 
 ## Phase 3 Task 3.4: VFX 事件处理
