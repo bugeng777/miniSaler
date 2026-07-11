@@ -161,6 +161,111 @@ func get_all_skill_defs() -> Dictionary:
 	return _skill_defs
 
 
+## ─── Phase 3: 技能效果计算调度 ─────────────────────────────────────────────
+## 根据 skill_id 路由到对应的效果类，返回计算后的效果字典
+## context 由 GameSession 提供，包含 prices/player_state 等运行时数据
+func compute_skill_effect(player_id: int, skill_id: StringName, context: Dictionary) -> Dictionary:
+	if not _skill_defs.has(skill_id):
+		return {}
+	var def: SkillTypes.SkillDef = _skill_defs[skill_id]
+	var level: int = _get_skill_level(player_id, skill_id)
+	match str(skill_id):
+		# ─── 分析类 ───
+		"news_reader":
+			return AnalysisSkills.apply_news_reader(def.base_value, level)
+		"trend_insight":
+			var history: Array = context.get("price_history", [])
+			return AnalysisSkills.apply_trend_insight(history, def.base_value, level)
+		"sentiment_sense":
+			return AnalysisSkills.apply_sentiment_sense(def.base_value)
+		"fundamental_scan":
+			return AnalysisSkills.apply_fundamental_scan(
+				context.get("symbol", &""),
+				context.get("current_price", 0.0),
+				context.get("intrinsic_value", 0.0))
+		"whale_tracker":
+			return AnalysisSkills.apply_whale_tracker(
+				context.get("whale_data", []), def.base_value, level)
+		# ─── 执行类 ───
+		"lightning_order":
+			return ExecutionSkills.apply_lightning_order(def.base_value, level)
+		"auto_stop_loss":
+			return ExecutionSkills.apply_auto_stop_loss(
+				context.get("symbol", &""),
+				context.get("entry_price", 0.0),
+				def.base_value, level)
+		"batch_trade":
+			return ExecutionSkills.apply_batch_trade(
+				context.get("orders", []), def.base_value)
+		"momentum_hunter":
+			return ExecutionSkills.apply_momentum_hunter(
+				context.get("price_histories", {}), def.base_value, level)
+		"short_expert":
+			return ExecutionSkills.apply_short_expert(def.base_value, level)
+		# ─── 防御类 ───
+		"iron_will":
+			return DefenseSkills.apply_iron_will(
+				context.get("current_cash", 0.0), def.base_value, level)
+		"risk_warning":
+			return DefenseSkills.apply_risk_warning(
+				context.get("seconds_before_crash", 0.0), def.base_value, level)
+		"safe_harbor":
+			return DefenseSkills.apply_safe_harbor(def.base_value, level)
+		"diversify":
+			return DefenseSkills.apply_diversify(
+				context.get("position_count", 0), def.base_value, level)
+		"cash_is_king":
+			return DefenseSkills.apply_cash_is_king(
+				context.get("current_cash", 0.0), def.base_value, level)
+		# ─── 社交类 ───
+		"market_rumor":
+			return SocialSkills.apply_market_rumor(
+				player_id, context.get("rumor_text", ""), def.base_value, level)
+		"herd_master":
+			return SocialSkills.apply_herd_master(
+				context.get("other_actions", []), def.base_value, level)
+		"opinion_leader":
+			return SocialSkills.apply_opinion_leader(player_id, def.base_value, level)
+		"insider_network":
+			return SocialSkills.apply_insider_network(def.base_value, level)
+		# ─── 激进类 ───
+		"leverage_maniac":
+			return AggressiveSkills.apply_leverage_maniac(
+				context.get("base_funds", 0.0), def.base_value, level)
+		"all_in":
+			return AggressiveSkills.apply_all_in(
+				context.get("current_positions", 0), def.base_value, level)
+		"doom_gambler":
+			return AggressiveSkills.apply_doom_gambler(
+				context.get("is_black_swan_active", false), def.base_value, level)
+		"reaper":
+			return AggressiveSkills.apply_reaper(
+				context.get("busted_player_profit", 0.0), def.base_value, level)
+	return {}
+
+
+## 获取玩家某技能的当前等级
+func _get_skill_level(player_id: int, skill_id: StringName) -> int:
+	if not _player_skills.has(player_id):
+		return 1
+	var skills: Dictionary = _player_skills[player_id]
+	if not skills.has(skill_id):
+		return 1
+	# SkillRuntimeState 不含 level，level 由 WS3 SkillProgress 管理
+	# 此处默认返回 1，实际等级由 GameSession 通过 set_player_skill_levels() 注入
+	return _player_skill_levels.get(player_id, {}).get(skill_id, 1)
+
+
+## 玩家技能等级缓存（由 GameSession 在准备阶段注入）
+var _player_skill_levels: Dictionary = {}  ## player_id -> {skill_id -> level}
+
+
+## 注入玩家技能等级（GameSession 在 loadout 阶段调用）
+func set_player_skill_levels(player_id: int, levels: Dictionary) -> void:
+	_player_skill_levels[player_id] = levels
+
+
 ## 清理玩家技能
 func clear_player(player_id: int) -> void:
 	_player_skills.erase(player_id)
+	_player_skill_levels.erase(player_id)
