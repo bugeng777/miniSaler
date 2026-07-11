@@ -33,6 +33,9 @@ class BossState:
 	var entry_time: float = 0.0
 	var last_trade_time: float = 0.0
 	var profit_loss: float = 0.0  ## Boss 当前盈亏
+	var positions: Dictionary = {}  ## symbol -> {"qty": int, "avg_price": float, "side": int}
+	var entry_prices: Dictionary = {}  ## symbol -> float 入场时价格
+	var dump_triggered: bool = false  ## 风投之王是否已触发出货
 
 
 var _bots: Array[BotState] = []
@@ -42,6 +45,8 @@ var _boss_spawned: bool = false
 var _current_era: EraData = null
 var _symbols: Array[StringName] = []
 var _base_prices: Dictionary = {}  ## symbol -> base_price（用于逆向投资者判断偏离度）
+var _boss_phase: int = 0  ## Boss 阶段（0=吸筹 1=拉高 2=出货），风投之王专用
+var _boss_phase_timer: float = 0.0
 
 ## 策略参数
 const TREND_WINDOW: int = 6           ## 趋势跟踪者观察最近 N tick
@@ -56,6 +61,8 @@ func start(era_config: EraData, symbols: Array[StringName], bot_count: int = 7) 
 	_symbols = symbols
 	_elapsed_time = 0.0
 	_boss_spawned = false
+	_boss_phase = 0
+	_boss_phase_timer = 0.0
 	_bots.clear()
 	_boss = null
 	# 记录基准价（用于逆向投资者判断偏离度）
@@ -234,18 +241,170 @@ func _aggressive_action(bot: BotState, symbol: StringName, price: float) -> Dict
 		randi_range(50, 200), price)
 
 
-## Boss 交易
+## Boss 交易（含时代专属行为）
 func _execute_boss_trade(prices: Dictionary) -> void:
 	if not _boss or not _boss.is_active:
 		return
 	if _symbols.is_empty() or prices.is_empty():
 		return
+	var era_id: StringName = _current_era.era_id if _current_era else &""
+	match str(era_id):
+		"hk_1997":
+			_boss_trade_currency_war(prices)
+		"seoul_1988":
+			_boss_trade_chaebol(prices)
+		"silicon_2000":
+			_boss_trade_ipo_king(prices)
+		"tokyo_1989":
+			_boss_trade_boj(prices)
+		"shanghai_2007":
+			_boss_trade_manipulator(prices)
+		_:
+			_boss_trade_default(prices)
+
+
+## 金融大鳄（香港1997）：大量做空，持续卖出施压
+func _boss_trade_currency_war(prices: Dictionary) -> void:
+	var target: StringName = _symbols[randi() % _symbols.size()]
+	if not prices.has(target):
+		return
+	var qty := _boss.config.trade_volume
+	if randf() < 0.3:  # 30%概率发动大额狙击
+		qty = int(qty * 2.5)
+	var action := _create_action(999, target, GameEnums.OrderSide.SELL, qty, prices[target])
+	_update_boss_position(target, -qty, prices[target])
+	boss_action_executed.emit(999, action)
+
+
+## 财阀掌门人（首尔1988）：内幕交易，精准操作财阀股
+func _boss_trade_chaebol(prices: Dictionary) -> void:
+	var chaebol_symbols: Array[StringName] = []
+	for sym in _symbols:
+		if str(sym).begins_with("KRCV") or str(sym).begins_with("KRHY") or str(sym).begins_with("KRDW"):
+			chaebol_symbols.append(sym)
+	var target: StringName
+	if chaebol_symbols.size() > 0 and randf() < 0.7:
+		target = chaebol_symbols[randi() % chaebol_symbols.size()]
+	else:
+		target = _symbols[randi() % _symbols.size()]
+	if not prices.has(target):
+		return
+	var side := GameEnums.OrderSide.BUY if randf() < 0.55 else GameEnums.OrderSide.SELL
+	var qty := _boss.config.trade_volume
+	if randf() < 0.2:  # 20%概率发动大额内幕交易
+		qty = int(qty * 3.0)
+	var action := _create_action(999, target, side, qty, prices[target])
+	_update_boss_position(target, qty if side == GameEnums.OrderSide.BUY else -qty, prices[target])
+	boss_action_executed.emit(999, action)
+
+
+## 风投之王（硅谧2000）：先拉高科技股，然后出货
+func _boss_trade_ipo_king(prices: Dictionary) -> void:
+	_boss_phase_timer += _boss.config.trade_interval
+	if _boss_phase_timer < 60.0:
+		_boss_phase = 0  # 吸筹
+	elif _boss_phase_timer < 120.0:
+		_boss_phase = 1  # 拉高
+	else:
+		_boss_phase = 2  # 出货
+	var tech_symbols: Array[StringName] = []
+	for sym in _symbols:
+		if str(sym).begins_with("USPE") or str(sym).begins_with("USWB") or str(sym).begins_with("USYA"):
+			tech_symbols.append(sym)
+	var target: StringName
+	if tech_symbols.size() > 0:
+		target = tech_symbols[randi() % tech_symbols.size()]
+	else:
+		target = _symbols[randi() % _symbols.size()]
+	if not prices.has(target):
+		return
+	var side: int
+	var qty: int = _boss.config.trade_volume
+	if _boss_phase <= 1:
+		side = GameEnums.OrderSide.BUY
+		qty = int(qty * 1.5)
+	else:
+		side = GameEnums.OrderSide.SELL
+		qty = int(qty * 2.0)
+		if not _boss.dump_triggered:
+			_boss.dump_triggered = true
+			boss_entered.emit("风投之王出货", {"phase": "dump", "target": str(target)})
+	var action := _create_action(999, target, side, qty, prices[target])
+	_update_boss_position(target, qty if side == GameEnums.OrderSide.BUY else -qty, prices[target])
+	boss_action_executed.emit(999, action)
+
+
+## 日本银行总裁（东京1989）：稳步买入，突然加息时大量卖出
+func _boss_trade_boj(prices: Dictionary) -> void:
+	var target: StringName = _symbols[randi() % _symbols.size()]
+	if not prices.has(target):
+		return
+	_boss_phase_timer += _boss.config.trade_interval
+	var total_ticks := _boss.config.trade_interval * 50.0
+	var time_ratio := _boss_phase_timer / total_ticks if total_ticks > 0 else 0.0
+	if time_ratio < 0.8:
+		var qty := int(_boss.config.trade_volume * 0.5)
+		var action := _create_action(999, target, GameEnums.OrderSide.BUY, qty, prices[target])
+		_update_boss_position(target, qty, prices[target])
+		boss_action_executed.emit(999, action)
+	else:
+		var qty := int(_boss.config.trade_volume * 3.0)
+		var action := _create_action(999, target, GameEnums.OrderSide.SELL, qty, prices[target])
+		_update_boss_position(target, -qty, prices[target])
+		boss_action_executed.emit(999, action)
+
+
+## 庄家联盟（上海2007）：操纵 ST 股，拉高出货
+func _boss_trade_manipulator(prices: Dictionary) -> void:
+	var st_symbols: Array[StringName] = []
+	for sym in _symbols:
+		if str(sym).begins_with("CNST") or str(sym).begins_with("CNSJ"):
+			st_symbols.append(sym)
+	var target: StringName
+	if st_symbols.size() > 0 and randf() < 0.8:
+		target = st_symbols[randi() % st_symbols.size()]
+	else:
+		target = _symbols[randi() % _symbols.size()]
+	if not prices.has(target):
+		return
+	_boss_phase_timer += _boss.config.trade_interval
+	var side: int
+	var qty: int = _boss.config.trade_volume
+	if _boss_phase_timer < 80.0:
+		side = GameEnums.OrderSide.BUY
+		qty = int(qty * 1.2)
+	else:
+		side = GameEnums.OrderSide.SELL
+		qty = int(qty * 2.5)
+	var action := _create_action(999, target, side, qty, prices[target])
+	_update_boss_position(target, qty if side == GameEnums.OrderSide.BUY else -qty, prices[target])
+	boss_action_executed.emit(999, action)
+
+
+## 默认 Boss 交易
+func _boss_trade_default(prices: Dictionary) -> void:
 	var target: StringName = _symbols[randi() % _symbols.size()]
 	if not prices.has(target):
 		return
 	var side := GameEnums.OrderSide.BUY if _boss.config.direction_bias > 0 else GameEnums.OrderSide.SELL
 	var action := _create_action(999, target, side, _boss.config.trade_volume, prices[target])
-	bot_action_executed.emit(999, action)
+	_update_boss_position(target, _boss.config.trade_volume if side == GameEnums.OrderSide.BUY else -_boss.config.trade_volume, prices[target])
+	boss_action_executed.emit(999, action)
+
+
+## 更新 Boss 持仓记录
+func _update_boss_position(symbol: StringName, qty_change: int, price: float) -> void:
+	if not _boss:
+		return
+	if not _boss.positions.has(symbol):
+		_boss.positions[symbol] = {"qty": 0, "avg_price": price, "side": 0}
+	var pos: Dictionary = _boss.positions[symbol]
+	var old_qty: int = pos["qty"]
+	pos["qty"] = old_qty + qty_change
+	if old_qty == 0 or (old_qty > 0 and qty_change > 0) or (old_qty < 0 and qty_change < 0):
+		var total_cost: float = pos["avg_price"] * abs(old_qty) + price * abs(qty_change)
+		pos["avg_price"] = total_cost / abs(pos["qty"]) if pos["qty"] != 0 else price
+	pos["side"] = 1 if pos["qty"] > 0 else (-1 if pos["qty"] < 0 else 0)
 
 
 ## Boss 入场
@@ -262,12 +421,51 @@ func _spawn_boss() -> void:
 	boss_entered.emit(_boss.boss_name, data)
 
 
-## 结算 Boss 结果
-func settle_boss(final_prices: Dictionary) -> void:
-	if _boss and _boss.is_active:
-		# 简化计算：假设 Boss 以均价买入/卖出
-		var result := {"boss_name": _boss.boss_name, "profit": _boss.profit_loss, "defeated": _boss.profit_loss < 0}
-		boss_defeated.emit(_boss.boss_name, result)
+## 结算 Boss 结果：判定击败、计算对面玩家奖励
+## player_positions: Dictionary — player_id -> {symbol -> {"qty": int, "side": int}}
+func settle_boss(final_prices: Dictionary, player_positions: Dictionary = {}) -> void:
+	if not _boss or not _boss.is_active:
+		return
+	# 计算 Boss 最终盈亏
+	_boss.profit_loss = 0.0
+	for symbol in _boss.positions:
+		var pos: Dictionary = _boss.positions[symbol]
+		var final_price: float = final_prices.get(symbol, pos["avg_price"])
+		var pnl: float = (final_price - pos["avg_price"]) * pos["qty"]
+		_boss.profit_loss += pnl
+	var is_defeated: bool = _boss.profit_loss < 0.0
+	# 找出 Boss 对面的玩家（Boss做空时做多、Boss做多时做空的玩家）
+	var winners: Array[int] = []
+	var total_reward: float = 0.0
+	if is_defeated:
+		var boss_net_direction: int = 0
+		for symbol in _boss.positions:
+			boss_net_direction += sign(_boss.positions[symbol]["qty"])
+		# boss_net_direction > 0 表示 Boss 总体做多，对面玩家是做空者
+		# boss_net_direction < 0 表示 Boss 总体做空，对面玩家是做多者
+		for pid in player_positions:
+			var p_positions: Dictionary = player_positions[pid]
+			var is_opposite := false
+			for sym in p_positions:
+				var p_side: int = sign(p_positions[sym].get("qty", 0))
+				if boss_net_direction < 0 and p_side > 0:
+					is_opposite = true  # Boss做空，玩家做多
+				elif boss_net_direction > 0 and p_side < 0:
+					is_opposite = true  # Boss做多，玩家做空
+			if is_opposite:
+				winners.append(pid)
+		# 奖励 = Boss亏损总额的 50% 分配给对面玩家
+		total_reward = abs(_boss.profit_loss) * 0.5
+	var reward_per_winner: float = total_reward / winners.size() if winners.size() > 0 else 0.0
+	var result := {
+		"boss_name": _boss.boss_name,
+		"profit": _boss.profit_loss,
+		"defeated": is_defeated,
+		"winners": winners,
+		"reward_per_winner": reward_per_winner,
+		"total_reward_pool": total_reward,
+	}
+	boss_defeated.emit(_boss.boss_name, result)
 
 
 ## 辅助：创建 action dict
