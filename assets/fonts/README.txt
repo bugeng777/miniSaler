@@ -1,3 +1,16 @@
+像素字体文件
+============
+
+zpix.ttf — 已下载 (v3.1.11)
+  来源: https://github.com/SolidZORO/zpix-pixel-font/releases
+  支持: 中文 + 英文 + 日文
+
+m5x7.ttf — 当前使用 Zpix 替代（Zpix 已覆盖英文字符）
+  如需原始 m5x7: https://managore.itch.io/m5x7 (Daniel Linssen)
+  下载后替换本目录的 m5x7.ttf 即可
+
+注意: Zpix 是 Git LFS 存储，通过 releases 页面下载成功。
+      m5x7 在 GitHub 上也是 LFS，curl 无法直接获取。
 像素字体文件（需手动下载）
 
 Zpix (中文像素字体):
