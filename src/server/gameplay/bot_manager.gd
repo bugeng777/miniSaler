@@ -9,6 +9,7 @@ class_name BotManager
 ## ─── 信号（接口 B：BotManager -> GameSession）─────────────────────────────
 signal bot_action_executed(bot_id: int, action: Dictionary)
 signal boss_entered(boss_name: String, boss_data: Dictionary)
+signal boss_action_executed(player_id: int, action: Dictionary)
 signal boss_defeated(boss_name: String, result: Dictionary)
 
 

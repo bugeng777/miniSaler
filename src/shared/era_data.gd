@@ -24,13 +24,13 @@ extends Resource
 @export var stock_configs: Array[Dictionary] = []
 
 ## 撤离窗口配置
-@export var extraction_config: ExtractionConfig = ExtractionConfig.new()
+var extraction_config: ExtractionConfig = ExtractionConfig.new()
 
 ## 新闻模板 ID 列表（NewsSystem 根据此列表加载新闻）
 @export var news_template_ids: Array[StringName] = []
 
 ## Boss 配置
-@export var boss_config: BossConfig = BossConfig.new()
+var boss_config: BossConfig = BossConfig.new()
 
 ## 氛围关键词（用于 UI 主题切换）
 @export var atmosphere_tags: Array[String] = []

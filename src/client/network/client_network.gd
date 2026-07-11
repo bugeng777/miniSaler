@@ -65,7 +65,7 @@ func disconnect_from_server() -> void:
 
 
 ## 是否已连接
-func is_connected() -> bool:
+func is_network_connected() -> bool:
 	return _is_connected
 
 

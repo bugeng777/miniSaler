@@ -24,11 +24,16 @@ var _safe_box_manager: SafeBoxManager = null
 var _rank_system: RankSystem = null
 var _achievement_system: AchievementSystem = null
 var _save_manager: SaveManager = null
+## Phase 3 新增子系统
+var _leaderboard_manager: LeaderboardManager = null
+var _matchmaking: Matchmaking = null
 
 ## 客户端
 var _client_network: ClientNetwork = null
 var _ui_manager: UIManager = null
 var _sfx_manager: SfxManager = null
+## Phase 3 VFX 图层
+var _vfx_layer: VfxLayer = null
 
 ## 玩家档案（跨局持久化）
 var _player_profile: PlayerTypes.PlayerProfile = null
@@ -135,6 +140,17 @@ func _create_server_subsystems() -> void:
 		_safe_box_manager.initialize(HOST_PLAYER_ID, _player_profile.safe_box_items,
 			_player_profile.safe_box_slots)
 
+	# Phase 3: LeaderboardManager (WS3) - 全局/赛季排行榜
+	_leaderboard_manager = LeaderboardManager.new()
+	_leaderboard_manager.name = "LeaderboardManager"
+	add_child(_leaderboard_manager)
+	_leaderboard_manager.initialize(_save_manager)
+
+	# Phase 3: Matchmaking (WS4) - 快速匹配与房间管理
+	_matchmaking = Matchmaking.new()
+	_matchmaking.name = "Matchmaking"
+	add_child(_matchmaking)
+
 
 ## 注入子系统引用到 GameSession
 func _inject_subsystems() -> void:
@@ -163,9 +179,19 @@ func _build_game_ui() -> void:
 	_ui_manager.register_screen("trading", TradingScreen.new())
 	_ui_manager.register_screen("settlement", SettlementScreen.new())
 	_ui_manager.register_screen("profile", ProfileScreen.new())
-	_ui_manager.register_screen("safe_box", SafeBoxScreen.new())
+	_ui_manager.register_screen("leaderboard", LeaderboardScreen.new())
+	_ui_manager.register_screen("tutorial", TutorialScreen.new())
 
-	_ui_manager.show_screen("era_select")
+	# Phase 3: VFX 图层（覆盖在所有屏幕之上）
+	_vfx_layer = VfxLayer.new()
+	_vfx_layer.name = "VfxLayer"
+	add_child(_vfx_layer)
+
+	# Phase 3: 首次启动（total_games==0）先显示新手引导
+	if _player_profile and _player_profile.total_games == 0:
+		_ui_manager.show_screen("tutorial")
+	else:
+		_ui_manager.show_screen("era_select")
 
 
 ## 填充时代选择屏幕数据
@@ -222,6 +248,27 @@ func _connect_ui_signals() -> void:
 	var settlement_screen := _find_screen("settlement")
 	if settlement_screen is SettlementScreen:
 		(settlement_screen as SettlementScreen).play_again_pressed.connect(_on_play_again)
+
+	# ── 新手引导屏幕 ──
+	var tutorial_screen := _find_screen("tutorial")
+	if tutorial_screen is TutorialScreen:
+		(tutorial_screen as TutorialScreen).tutorial_completed.connect(_on_tutorial_done)
+		(tutorial_screen as TutorialScreen).tutorial_skipped.connect(_on_tutorial_done)
+
+	# ── Phase 3: SkillSystem SkillEffect 分发 ──
+	if _skill_system and _skill_system.has_signal("skill_effect_applied"):
+		_skill_system.skill_effect_applied.connect(_on_skill_effect_applied)
+
+	# ── Phase 3: VFX 事件连接（直接连到子系统信号）──
+	if _market_engine and _market_engine.has_signal("order_filled_passthrough"):
+		_market_engine.order_filled_passthrough.connect(_on_vfx_order_filled)
+	if _extraction_engine:
+		if _extraction_engine.has_signal("player_extracted"):
+			_extraction_engine.player_extracted.connect(_on_vfx_player_extracted)
+		if _extraction_engine.has_signal("player_busted"):
+			_extraction_engine.player_busted.connect(_on_vfx_player_busted)
+	if _bot_manager and _bot_manager.has_signal("boss_entered"):
+		_bot_manager.boss_entered.connect(_on_vfx_boss_entered)
 
 
 ## ─── UI 事件处理 ─────────────────────────────────────────────────────────────
@@ -338,10 +385,6 @@ func _on_data_received(msg: Dictionary) -> void:
 			_on_skill_state(msg)
 		NetworkProtocol.MSG_BOSS_EVENT:
 			_on_boss_event(msg)
-		NetworkProtocol.MSG_PASSIVE_EFFECTS:
-			_on_passive_effects(msg)
-		NetworkProtocol.MSG_ORDER_REJECTED:
-			_on_order_rejected(msg)
 
 
 func _on_market_tick(data: Dictionary) -> void:
@@ -425,6 +468,69 @@ func _on_boss_event(data: Dictionary) -> void:
 		(trading as TradingScreen).add_news("[BOSS] %s 入场！" % boss_name)
 	if _sfx_manager:
 		_sfx_manager.play_sfx(SfxManager.SfxType.BOSS_ENTER)
+
+
+## Phase 3 Task 3.3: SkillEffect 分发
+func _on_skill_effect_applied(player_id: int, skill_id: StringName, effect: Dictionary) -> void:
+	var effect_type: StringName = StringName(effect.get("effect_type", ""))
+	var target: StringName = StringName(effect.get("target", ""))
+	var value: float = effect.get("value", 0.0)
+	var duration: float = effect.get("duration", 0.0)
+	match effect_type:
+		&"market_data":
+			if _market_engine and _market_engine.has_method("apply_skill_query"):
+				_market_engine.apply_skill_query(player_id, skill_id, target, value, duration)
+		&"fund_modifier":
+			if _player_manager and _player_manager.has_method("apply_fund_modifier"):
+				_player_manager.apply_fund_modifier(player_id, skill_id, target, value, duration)
+		&"order_modifier":
+			if _player_manager and _player_manager.has_method("apply_order_modifier"):
+				_player_manager.apply_order_modifier(player_id, skill_id, target, value, duration)
+		&"ui_display":
+			var trading := _find_screen("trading")
+			if trading is TradingScreen and trading.has_method("apply_skill_display"):
+				(trading as TradingScreen).apply_skill_display(skill_id, target, value, duration)
+		&"extraction":
+			if _extraction_engine and _extraction_engine.has_method("extend_window"):
+				_extraction_engine.extend_window(value)
+		&"social":
+			if _bot_manager and _bot_manager.has_method("apply_social_effect"):
+				_bot_manager.apply_social_effect(player_id, skill_id, target, value, duration)
+		_:
+			push_warning("Main: 未知 SkillEffect effect_type: " + str(effect_type))
+
+
+## Phase 3 Task 3.4: VFX 事件处理
+func _on_vfx_order_filled(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+	if not _vfx_layer or order.player_id != HOST_PLAYER_ID:
+		return
+	var center := get_viewport().get_visible_rect().size * 0.5
+	var amount: float = fill_price * fill_qty
+	if order.side == GameEnums.OrderSide.BUY:
+		_vfx_layer.play_loss_effect(amount, center)
+	else:
+		_vfx_layer.play_profit_effect(amount, center)
+
+
+func _on_vfx_player_extracted(player_id: int, _profit: float) -> void:
+	if _vfx_layer and player_id == HOST_PLAYER_ID:
+		_vfx_layer.play_extraction_success()
+
+
+func _on_vfx_player_busted(player_id: int) -> void:
+	if _vfx_layer and player_id == HOST_PLAYER_ID:
+		_vfx_layer.play_bust_effect()
+
+
+func _on_vfx_boss_entered(boss_name: String, _boss_data: Dictionary) -> void:
+	if _vfx_layer:
+		_vfx_layer.play_boss_entrance(boss_name)
+
+
+## Phase 3 Task 3.5: 新手引导完成回调
+func _on_tutorial_done() -> void:
+	_ui_manager.show_screen("era_select")
+	_populate_era_screen()
 
 
 ## 辅助：查找已注册屏幕

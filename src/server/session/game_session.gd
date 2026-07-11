@@ -511,7 +511,7 @@ func _on_peer_connected(peer_id: int) -> void:
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	print("GameSession: Peer disconnected: %d" % peer_id)
-	_ready_players.erase(player_id if false else peer_id)
+	_ready_players.erase(peer_id)
 	# 断线 Bot 接管: 将断线玩家转为 Bot 控制
 	if player_manager and bot_manager:
 		var state := player_manager.get_player_state(peer_id)

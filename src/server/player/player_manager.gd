@@ -61,8 +61,8 @@ func submit_order(player_id: int, symbol: StringName, side: int,
 
 	# 买入检查：现金是否足够
 	if side == GameEnums.OrderSide.BUY and order_type == GameEnums.OrderType.MARKET:
-		var cost := _current_prices.get(symbol, 0.0) * quantity
-		var fee := cost * Constants.TRANSACTION_FEE_RATE
+		var cost: float = _current_prices.get(symbol, 0.0) * quantity
+		var fee: float = cost * Constants.TRANSACTION_FEE_RATE
 		if state.cash < cost + fee:
 			order.status = GameEnums.OrderStatus.REJECTED
 			return order
@@ -87,7 +87,7 @@ func on_order_filled(player_id: int, order_id: String, fill_price: float, fill_q
 
 			# 更新资金和持仓
 			var cost := fill_price * fill_qty
-			var fee := cost * Constants.TRANSACTION_FEE_RATE
+			var fee: float = cost * Constants.TRANSACTION_FEE_RATE
 
 			if order.side == GameEnums.OrderSide.BUY:
 				state.cash -= (cost + fee)
@@ -203,7 +203,7 @@ func check_welfare(profile: PlayerTypes.PlayerProfile) -> float:
 	if profile.total_funds >= Constants.WELFARE_TRIGGER:
 		return 0.0
 	if profile.last_welfare_time != "":
-		var last_time := Time.get_datetime_dict_from_datetime_string(profile.last_welfare_time)
+		var last_time: Dictionary = Time.get_datetime_dict_from_datetime_string(profile.last_welfare_time, false)
 		var now := Time.get_datetime_dict_from_system()
 		var hours_diff := _hours_between(last_time, now)
 		if hours_diff < Constants.WELFARE_COOLDOWN_HOURS:
