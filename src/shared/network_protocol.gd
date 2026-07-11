@@ -44,26 +44,42 @@ static func build_market_tick_msg(tick_data: MarketTypes.TickData) -> Dictionary
 	}
 
 
+## 字段级细粒度 delta：只发送变化字段，使用缩写 key 减少包大小
+## 缩写映射: s=symbol, p=close(price), v=volume, h=high, l=low, cb=circuit_broken, cr=circuit_remaining
 static func build_market_tick_delta(prev_snapshots: Dictionary,
 		current: MarketTypes.TickData) -> Dictionary:
 	var changed: Array[Dictionary] = []
 	for snap in current.snapshots:
 		var prev: MarketTypes.StockSnapshot = prev_snapshots.get(snap.symbol, null)
-		if prev == null or _snapshot_changed(prev, snap):
+		if prev == null:
+			# 首次出现的股票发送完整快照（含 name/sector 等静态字段）
 			changed.append(snap.to_dict())
-	return {"msg_type": MSG_MARKET_TICK_DELTA, "tick_index": current.tick_index,
-		"elapsed_time": current.elapsed_time,
-		"fear_greed_index": current.fear_greed_index, "changed": changed}
+		else:
+			var partial := _build_partial_delta(prev, snap)
+			if not partial.is_empty():
+				partial["s"] = snap.symbol
+				changed.append(partial)
+	return {"msg_type": MSG_MARKET_TICK_DELTA, "t": current.tick_index,
+		"e": current.elapsed_time, "f": current.fear_greed_index, "c": changed}
+
+
+## 只打包变化的字段
+static func _build_partial_delta(prev: MarketTypes.StockSnapshot,
+		curr: MarketTypes.StockSnapshot) -> Dictionary:
+	var d := {}
+	if absf(prev.close - curr.close) > 0.001: d["p"] = curr.close
+	if absf(prev.volume - curr.volume) > 0.001: d["v"] = curr.volume
+	if absf(prev.high - curr.high) > 0.001: d["h"] = curr.high
+	if absf(prev.low - curr.low) > 0.001: d["l"] = curr.low
+	if prev.is_circuit_broken != curr.is_circuit_broken:
+		d["cb"] = curr.is_circuit_broken
+		d["cr"] = curr.circuit_break_remaining
+	return d
 
 
 static func _snapshot_changed(prev: MarketTypes.StockSnapshot,
 		curr: MarketTypes.StockSnapshot) -> bool:
-	if absf(prev.close - curr.close) > 0.001: return true
-	if absf(prev.volume - curr.volume) > 0.001: return true
-	if prev.is_circuit_broken != curr.is_circuit_broken: return true
-	if absf(prev.high - curr.high) > 0.001: return true
-	if absf(prev.low - curr.low) > 0.001: return true
-	return false
+	return not _build_partial_delta(prev, curr).is_empty()
 
 ## 构建新闻广播数据
 static func build_news_msg(text: String, impact: int, magnitude: float,
