@@ -191,10 +191,16 @@ class EraMechanicsHandler:
 
 	## 机制效果信号（供 GameSession 连接后转发）
 	signal mechanic_event_triggered(mechanic_id: StringName, data: Dictionary)
+	## Phase 3 新增：技能与机制联动信号（供 GameSession 转发给 SkillSystem/WS5）
+	signal skill_mechanic_interaction(player_id: int, skill_id: StringName, interaction_data: Dictionary)
 
 	var _active_mechanics: Array[StringName] = []
 	var _elapsed_time: float = 0.0
 	var _era_config: EraData = null
+
+	## 玩家被动技能注册表（由 GameSession 在装备技能时注入）
+	## player_id -> Dictionary(skill_id -> base_value)
+	var _player_passives: Dictionary = {}
 
 	## IPO 狂潮参数
 	const IPO_INTERVAL: float = 45.0  ## 每 45 秒注入一次 IPO 事件
@@ -218,6 +224,11 @@ class EraMechanicsHandler:
 		_next_currency_war_time = CURRENCY_WAR_INTERVAL
 		_currency_pressure = 0.0
 		_today_bought.clear()
+		_player_passives.clear()
+
+	## 注册玩家被动技能（由 GameSession 在 passive_effects_changed 信号时调用）
+	func register_player_passives(player_id: int, passives: Dictionary) -> void:
+		_player_passives[player_id] = passives
 
 	## 每 tick 更新（由 GameSession 调用）
 	func update(delta: float) -> void:
@@ -226,8 +237,10 @@ class EraMechanicsHandler:
 			match mechanic:
 				&"currency_war":
 					_update_currency_war(delta)
+					_check_risk_warning_for_currency_war()
 				&"ipo_frenzy":
 					_update_ipo_frenzy(delta)
+					_check_pre_ipo_item_interaction()
 
 	## 获取当前激活的特殊机制列表
 	func get_active_mechanics() -> Array[StringName]:
@@ -255,6 +268,26 @@ class EraMechanicsHandler:
 	func get_currency_pressure() -> float:
 		return _currency_pressure
 
+	## ─── 汇率战 × 风险预警技能联动 ────────────────────────────────
+	## 当汇率压力即将触发时，拥有"风险预警"技能的玩家提前收到警告
+	func _check_risk_warning_for_currency_war() -> void:
+		if not has_mechanic(&"currency_war"):
+			return
+		# 检查是否有玩家拥有 risk_warning 技能
+		for player_id in _player_passives:
+			var passives: Dictionary = _player_passives[player_id]
+			if passives.has(&"risk_warning"):
+				var advance_seconds: float = passives[&"risk_warning"]  # base_value=30.0
+				var time_until_war: float = _next_currency_war_time - _elapsed_time
+				if time_until_war <= advance_seconds and time_until_war > 0.0:
+					var interaction := {
+						"mechanic": "currency_war",
+						"warning": "汇率压力即将爆发！",
+						"seconds_until": time_until_war,
+						"current_pressure": _currency_pressure,
+					}
+					skill_mechanic_interaction.emit(player_id, &"risk_warning", interaction)
+
 	## ─── chaebol_policy（首尔 1988）：政府政策新闻对财阀股影响 ×2 ────────
 	## 由 NewsSystem 的新闻事件触发，GameSession 调用此方法获取倍率
 	func get_chaebol_news_multiplier() -> float:
@@ -281,6 +314,29 @@ class EraMechanicsHandler:
 				"hype_multiplier": randf_range(2.0, 5.0),
 			}
 			mechanic_event_triggered.emit(&"ipo_frenzy", data)
+
+	## ─── IPO 狂潮 × Pre-IPO 入场券道具联动 ────────────────────────
+	## 拥有 Pre-IPO 入场券的玩家可以在 IPO 触发前提前买入
+	func _check_pre_ipo_item_interaction() -> void:
+		if not has_mechanic(&"ipo_frenzy"):
+			return
+		# 检查是否有玩家拥有 insider_network 技能（每局 +1 独家新闻）
+		for player_id in _player_passives:
+			var passives: Dictionary = _player_passives[player_id]
+			if passives.has(&"insider_network"):
+				var time_until_ipo: float = _next_ipo_time - _elapsed_time
+				# 提前 10 秒通知拥有内幕网络的玩家
+				if time_until_ipo <= 10.0 and time_until_ipo > 0.0:
+					var ipo_idx := int((_elapsed_time - IPO_INTERVAL) / IPO_INTERVAL) + 1
+					var ipo_companies := ["eToys", "TheGlobe.com", "VA Linux", "Priceline"]
+					var next_company: String = ipo_companies[ipo_idx % ipo_companies.size()]
+					var interaction := {
+						"mechanic": "ipo_frenzy",
+						"warning": "内幕消息：%s 即将 IPO！" % next_company,
+						"seconds_until": time_until_ipo,
+						"company_name": next_company,
+					}
+					skill_mechanic_interaction.emit(player_id, &"insider_network", interaction)
 
 	## ─── leverage_party（东京 1989）：所有玩家初始可借入额外资金 ────────
 	## GameSession 在准备阶段调用，获取每个玩家的额外借款额度
