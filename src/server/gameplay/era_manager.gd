@@ -387,7 +387,7 @@ class EraMechanicsHandler:
 				"symbol": symbol,
 				"limit_type": _limit_triggered[symbol]["type"],
 				"is_limited": true,
-				"remaining": _limit_triggered[sym]["remaining"],
+				"remaining": _limit_triggered[symbol]["remaining"],
 			}
 		var opening: float = _opening_prices[symbol]
 		if opening <= 0.0:
