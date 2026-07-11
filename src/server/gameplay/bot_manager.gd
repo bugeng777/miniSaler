@@ -10,6 +10,8 @@ class_name BotManager
 signal bot_action_executed(bot_id: int, action: Dictionary)
 signal boss_entered(boss_name: String, boss_data: Dictionary)
 signal boss_action_executed(player_id: int, action: Dictionary)
+## Phase 4 新增：Boss 阶段转换信号（phase: "dump"/"rate_hike"/"crash"/"rage"/"short_squeeze"）
+signal boss_phase_changed(boss_name: String, phase: String, data: Dictionary)
 signal boss_defeated(boss_name: String, result: Dictionary)
 
 
@@ -37,6 +39,8 @@ class BossState:
 	var positions: Dictionary = {}  ## symbol -> {"qty": int, "avg_price": float, "side": int}
 	var entry_prices: Dictionary = {}  ## symbol -> float 入场时价格
 	var dump_triggered: bool = false  ## 风投之王是否已触发出货
+	var cash_spent: float = 0.0  ## 累计已使用资金（绝对值之和）
+	var rage_triggered: bool = false  ## 是否进入暴走模式
 
 
 var _bots: Array[BotState] = []
@@ -48,12 +52,22 @@ var _symbols: Array[StringName] = []
 var _base_prices: Dictionary = {}  ## symbol -> base_price（用于逆向投资者判断偏离度）
 var _boss_phase: int = 0  ## Boss 阶段（0=吸筹 1=拉高 2=出货），风投之王专用
 var _boss_phase_timer: float = 0.0
+var _boss_rage_active: bool = false  ## Boss 当前是否处于暴走模式
+var _boss_exhausted: bool = false  ## Boss 资金是否耗尽
+var _boss_news_boost_timer: float = 0.0  ## 新闻联动剩余时间
+var _boss_news_direction: int = 0  ## 新闻情感方向
+var _boss_news_sector: String = ""  ## 新闻目标板块
 
 ## 策略参数
 const TREND_WINDOW: int = 6           ## 趋势跟踪者观察最近 N tick
 const CONTRARIAN_DEVIATION: float = 0.08  ## 逆向投资者：偏离基准价 >8% 才操作
 const NOISE_PAUSE_CHANCE: float = 0.35   ## 噪音交易者：暂停观望概率
 const AGGRESSIVE_BOSS_FOLLOW_CHANCE: float = 0.7  ## 激进交易者：跟随 Boss 方向概率
+
+## Boss 资金参数
+const BOSS_RAGE_THRESHOLD: float = 0.8  ## 已用资金超过总资金80%进入暴走
+const BOSS_RAGE_FREQ_MULT: float = 0.5  ## 暴走模式下交易频率翻倍（间隔×0.5）
+const BOSS_RAGE_VOL_MULT: float = 1.5  ## 暴走模式下交易量×1.5
 
 
 ## 初始化 Bot 池
@@ -64,6 +78,11 @@ func start(era_config: EraData, symbols: Array[StringName], bot_count: int = 7) 
 	_boss_spawned = false
 	_boss_phase = 0
 	_boss_phase_timer = 0.0
+	_boss_rage_active = false
+	_boss_exhausted = false
+	_boss_news_boost_timer = 0.0
+	_boss_news_direction = 0
+	_boss_news_sector = ""
 	_bots.clear()
 	_boss = null
 	# 记录基准价（用于逆向投资者判断偏离度）
@@ -132,10 +151,24 @@ func update(delta: float, prices: Dictionary) -> void:
 
 	# 更新 Boss 行为
 	if _boss and _boss.is_active:
+		_boss_phase_timer += delta  ## 统一在此递增，各Boss方法内不再重复
+		# 新闻联动计时器衰减
+		if _boss_news_boost_timer > 0.0:
+			_boss_news_boost_timer -= delta
 		_boss.last_trade_time += delta
-		if _boss.last_trade_time >= _boss.config.trade_interval:
+		# 暴走模式下交易频率翻倍
+		var effective_interval: float = _boss.config.trade_interval
+		if _boss_rage_active:
+			effective_interval *= BOSS_RAGE_FREQ_MULT
+		if _boss.last_trade_time >= effective_interval:
 			_boss.last_trade_time = 0.0
-			_execute_boss_trade(prices)
+			# 资金耗尽检测：停止交易
+			if _boss_exhausted:
+				pass  # 资金耗尽，不再交易
+			else:
+				_execute_boss_trade(prices)
+				# 每次交易后检查资金状态
+				_check_boss_capital()
 
 
 ## 执行 Bot 策略
@@ -242,6 +275,22 @@ func _aggressive_action(bot: BotState, symbol: StringName, price: float) -> Dict
 		randi_range(50, 200), price)
 
 
+## 检查 Boss 资金状态：耗尽 or 暴走
+func _check_boss_capital() -> void:
+	if not _boss:
+		return
+	var ratio: float = _boss.cash_spent / _boss.cash if _boss.cash > 0 else 1.0
+	if ratio >= 1.0 and not _boss_exhausted:
+		_boss_exhausted = true
+		boss_phase_changed.emit(_boss.boss_name, "exhausted", {
+			"cash_spent": _boss.cash_spent, "capital": _boss.cash})
+	elif ratio >= BOSS_RAGE_THRESHOLD and not _boss_rage_active:
+		_boss_rage_active = true
+		_boss.rage_triggered = true
+		boss_phase_changed.emit(_boss.boss_name, "rage", {
+			"cash_spent": _boss.cash_spent, "capital": _boss.cash, "ratio": ratio})
+
+
 ## Boss 交易（含时代专属行为）
 func _execute_boss_trade(prices: Dictionary) -> void:
 	if not _boss or not _boss.is_active:
@@ -264,20 +313,52 @@ func _execute_boss_trade(prices: Dictionary) -> void:
 			_boss_trade_default(prices)
 
 
-## 金融大鳄（香港1997）：大量做空，持续卖出施压
+## 金融大鳄（香港1997）：分阶段做空 — 试探→全力→逼空回补
 func _boss_trade_currency_war(prices: Dictionary) -> void:
-	var target: StringName = _symbols[randi() % _symbols.size()]
+	# 优先攻击金融板块股票
+	var finance_symbols: Array[StringName] = []
+	for sym in _symbols:
+		if str(sym).begins_with("HKBK"):
+			finance_symbols.append(sym)
+	var target: StringName
+	if finance_symbols.size() > 0 and randf() < 0.7:
+		target = finance_symbols[randi() % finance_symbols.size()]
+	else:
+		target = _symbols[randi() % _symbols.size()]
 	if not prices.has(target):
 		return
-	var qty := _boss.config.trade_volume
-	if randf() < 0.3:  # 30%概率发动大额狙击
-		qty = int(qty * 2.5)
-	var action := _create_action(999, target, GameEnums.OrderSide.SELL, qty, prices[target])
-	_update_boss_position(target, -qty, prices[target])
+	var side: int = GameEnums.OrderSide.SELL
+	var qty: int = _boss.config.trade_volume
+	if _boss_phase_timer < 30.0:
+		# 阶段0: 试探做空（50%量）
+		_boss_phase = 0
+		qty = int(qty * 0.5)
+	elif _boss_phase_timer < 90.0:
+		# 阶段1: 全力做空（100%量 + 30%大额狙击）
+		if _boss_phase == 0:
+			_boss_phase = 1
+			boss_phase_changed.emit(_boss.boss_name, "full_attack", {
+				"target": str(target)})
+		if randf() < 0.3:
+			qty = int(qty * 2.5)
+	else:
+		# 阶段2: 偶尔回补制造空头陷阱（70%做空 30%回补）
+		if _boss_phase == 1:
+			_boss_phase = 2
+			boss_phase_changed.emit(_boss.boss_name, "short_squeeze", {
+				"target": str(target)})
+		if randf() < 0.3:
+			side = GameEnums.OrderSide.BUY
+			qty = int(qty * 0.8)  # 回补量较小
+	# 暴走模式加量
+	if _boss_rage_active:
+		qty = int(qty * BOSS_RAGE_VOL_MULT)
+	var action := _create_action(999, target, side, qty, prices[target])
+	_update_boss_position(target, qty if side == GameEnums.OrderSide.BUY else -qty, prices[target])
 	boss_action_executed.emit(999, action)
 
 
-## 财阀掌门人（首尔1988）：内幕交易，精准操作财阀股
+## 财阀掌门人（首尔1988）：内幕交易 + 新闻联动精准操作
 func _boss_trade_chaebol(prices: Dictionary) -> void:
 	var chaebol_symbols: Array[StringName] = []
 	for sym in _symbols:
@@ -290,21 +371,39 @@ func _boss_trade_chaebol(prices: Dictionary) -> void:
 		target = _symbols[randi() % _symbols.size()]
 	if not prices.has(target):
 		return
-	var side := GameEnums.OrderSide.BUY if randf() < 0.55 else GameEnums.OrderSide.SELL
-	var qty := _boss.config.trade_volume
-	if randf() < 0.2:  # 20%概率发动大额内幕交易
+	var side: int
+	var qty: int = _boss.config.trade_volume
+	# 内幕交易：20%概率发动大额精准操作
+	if randf() < 0.2:
 		qty = int(qty * 3.0)
+		side = GameEnums.OrderSide.BUY if randf() < 0.6 else GameEnums.OrderSide.SELL
+	else:
+		side = GameEnums.OrderSide.BUY if randf() < 0.55 else GameEnums.OrderSide.SELL
+	# 暴走模式加量
+	if _boss_rage_active:
+		qty = int(qty * BOSS_RAGE_VOL_MULT)
 	var action := _create_action(999, target, side, qty, prices[target])
 	_update_boss_position(target, qty if side == GameEnums.OrderSide.BUY else -qty, prices[target])
 	boss_action_executed.emit(999, action)
 
 
+## 通知 Boss 新闻事件已触发（由 GameSession 在收到 chaebol 新闻时调用）
+## 在新闻后 5 秒内 Boss 将精准大额操作对应方向
+func notify_boss_news_event(sentiment: int, target_sector: String) -> void:
+	if not _boss or not _boss.is_active:
+		return
+	if _current_era and _current_era.era_id == &"seoul_1988":
+		_boss_news_boost_timer = 5.0  # 5秒联动窗口
+		_boss_news_direction = sentiment  # POSITIVE=买入, NEGATIVE=卖出
+		_boss_news_sector = target_sector
+
+
 ## 风投之王（硅谧2000）：先拉高科技股，然后出货
 func _boss_trade_ipo_king(prices: Dictionary) -> void:
-	_boss_phase_timer += _boss.config.trade_interval
-	if _boss_phase_timer < 60.0:
+	## _boss_phase_timer 已在 update() 中统一递增
+	if _boss_phase_timer < 45.0:
 		_boss_phase = 0  # 吸筹
-	elif _boss_phase_timer < 120.0:
+	elif _boss_phase_timer < 90.0:
 		_boss_phase = 1  # 拉高
 	else:
 		_boss_phase = 2  # 出货
@@ -329,7 +428,10 @@ func _boss_trade_ipo_king(prices: Dictionary) -> void:
 		qty = int(qty * 2.0)
 		if not _boss.dump_triggered:
 			_boss.dump_triggered = true
-			boss_entered.emit("风投之王出货", {"phase": "dump", "target": str(target)})
+			boss_phase_changed.emit(_boss.boss_name, "dump", {"target": str(target)})
+		# 出货阶段交易量随时间递增（模拟恐慌性抛售）
+		var dump_elapsed: float = _boss_phase_timer - 90.0
+		qty = int(qty * (2.0 + dump_elapsed * 0.02))  # 每秒额外+2%
 	var action := _create_action(999, target, side, qty, prices[target])
 	_update_boss_position(target, qty if side == GameEnums.OrderSide.BUY else -qty, prices[target])
 	boss_action_executed.emit(999, action)
@@ -340,16 +442,22 @@ func _boss_trade_boj(prices: Dictionary) -> void:
 	var target: StringName = _symbols[randi() % _symbols.size()]
 	if not prices.has(target):
 		return
-	_boss_phase_timer += _boss.config.trade_interval
-	var total_ticks := _boss.config.trade_interval * 50.0
-	var time_ratio := _boss_phase_timer / total_ticks if total_ticks > 0 else 0.0
-	if time_ratio < 0.8:
+	## _boss_phase_timer 已在 update() 中统一递增
+	## 前90秒稳步买入（制造泡沫），90秒后加息大量卖出
+	if _boss_phase_timer < 90.0:
 		var qty := int(_boss.config.trade_volume * 0.5)
 		var action := _create_action(999, target, GameEnums.OrderSide.BUY, qty, prices[target])
 		_update_boss_position(target, qty, prices[target])
 		boss_action_executed.emit(999, action)
 	else:
+		# 加息触发：emit 阶段转换信号（仅首次）
+		if _boss_phase == 0:
+			_boss_phase = 1
+			boss_phase_changed.emit(_boss.boss_name, "rate_hike", {
+				"boss_phase_timer": _boss_phase_timer})
 		var qty := int(_boss.config.trade_volume * 3.0)
+		if _boss_rage_active:
+			qty = int(qty * BOSS_RAGE_VOL_MULT)
 		var action := _create_action(999, target, GameEnums.OrderSide.SELL, qty, prices[target])
 		_update_boss_position(target, -qty, prices[target])
 		boss_action_executed.emit(999, action)
@@ -368,15 +476,27 @@ func _boss_trade_manipulator(prices: Dictionary) -> void:
 		target = _symbols[randi() % _symbols.size()]
 	if not prices.has(target):
 		return
-	_boss_phase_timer += _boss.config.trade_interval
+	## _boss_phase_timer 已在 update() 中统一递增
+	## 前60s拉高 → 60-90s出货 → 90s+砸盘
 	var side: int
 	var qty: int = _boss.config.trade_volume
-	if _boss_phase_timer < 80.0:
+	if _boss_phase_timer < 60.0:
 		side = GameEnums.OrderSide.BUY
 		qty = int(qty * 1.2)
+	elif _boss_phase_timer < 90.0:
+		side = GameEnums.OrderSide.SELL
+		qty = int(qty * 2.0)
+		if _boss_phase == 0:
+			_boss_phase = 1
+			boss_phase_changed.emit(_boss.boss_name, "dump", {
+				"target": str(target)})
 	else:
 		side = GameEnums.OrderSide.SELL
-		qty = int(qty * 2.5)
+		qty = int(qty * 3.0)  # 砸盘阶段大额卖出
+		if _boss_phase == 1:
+			_boss_phase = 2
+			boss_phase_changed.emit(_boss.boss_name, "crash", {
+				"target": str(target)})
 	var action := _create_action(999, target, side, qty, prices[target])
 	_update_boss_position(target, qty if side == GameEnums.OrderSide.BUY else -qty, prices[target])
 	boss_action_executed.emit(999, action)
@@ -393,10 +513,12 @@ func _boss_trade_default(prices: Dictionary) -> void:
 	boss_action_executed.emit(999, action)
 
 
-## 更新 Boss 持仓记录
+## 更新 Boss 持仓记录 + 累计资金消耗
 func _update_boss_position(symbol: StringName, qty_change: int, price: float) -> void:
 	if not _boss:
 		return
+	# 累计资金消耗（每笔交易的绝对金额）
+	_boss.cash_spent += abs(qty_change) * price
 	if not _boss.positions.has(symbol):
 		_boss.positions[symbol] = {"qty": 0, "avg_price": price, "side": 0}
 	var pos: Dictionary = _boss.positions[symbol]
