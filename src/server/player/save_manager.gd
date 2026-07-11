@@ -143,3 +143,25 @@ func _create_default_profile() -> PlayerTypes.PlayerProfile:
 	profile.unlocked_skills = [&"news_reader", &"sentiment_sense", &"safe_harbor"]
 	profile.created_at = Time.get_datetime_string_from_system()
 	return profile
+
+
+## 加载排行榜数据
+func load_leaderboard() -> Dictionary:
+	var path := SAVE_DIR + "leaderboard.json"
+	if not FileAccess.file_exists(path):
+		return {"global": [], "season": [], "season_id": ""}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return {"global": [], "season": [], "season_id": ""}
+	var json := JSON.new()
+	if json.parse(file.get_as_text()) != OK:
+		push_warning("SaveManager: Failed to parse leaderboard JSON")
+		file.close()
+		return {"global": [], "season": [], "season_id": ""}
+	file.close()
+	return json.data if json.data else {"global": [], "season": [], "season_id": ""}
+
+
+## 保存排行榜数据
+func save_leaderboard(data: Dictionary) -> bool:
+	return _atomic_write(SAVE_DIR + "leaderboard.json", JSON.stringify(data, "\t"))

@@ -239,3 +239,41 @@ class PlayerProfile:
 		prof.last_welfare_time = data.get("last_welfare_time", "")
 		prof.created_at = data.get("created_at", "")
 		return prof
+
+## 排行榜条目
+class LeaderboardEntry:
+	var player_name: String = ""
+	var total_profit: float = 0.0
+	var total_games: int = 0
+	var total_extractions: int = 0
+	var rank_points: int = 0
+	var rank_tier: int = GameEnums.RankTier.BRONZE
+	var season_id: String = ""  ## 赛季标识（如 "2026-07"）
+
+	func get_win_rate() -> float:
+		if total_games == 0:
+			return 0.0
+		return float(total_extractions) / float(total_games)
+
+	func to_dict() -> Dictionary:
+		return {
+			"player_name": player_name,
+			"total_profit": total_profit,
+			"total_games": total_games,
+			"total_extractions": total_extractions,
+			"rank_points": rank_points,
+			"rank_tier": rank_tier,
+			"season_id": season_id,
+		}
+
+	static func from_dict(data: Dictionary) -> LeaderboardEntry:
+		var e := LeaderboardEntry.new()
+		e.player_name = data.get("player_name", "")
+		e.total_profit = data.get("total_profit", 0.0)
+		e.total_games = data.get("total_games", 0)
+		e.total_extractions = data.get("total_extractions", 0)
+		e.rank_points = data.get("rank_points", 0)
+		e.rank_tier = data.get("rank_tier", GameEnums.RankTier.BRONZE)
+		e.season_id = data.get("season_id", "")
+		return e
+

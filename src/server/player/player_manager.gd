@@ -18,6 +18,8 @@ signal level_up(player_id: int, new_level: int)
 var _players: Dictionary = {}  ## player_id -> PlayerStateData
 ## 当前市场价格引用（由 GameSession 每 tick 更新）
 var _current_prices: Dictionary = {}
+## 技能效果追踪
+var _bust_protection: Dictionary = {}  ## player_id -> retain_ratio (0.0~1.0)
 
 
 ## 注册玩家
@@ -161,6 +163,10 @@ func force_liquidate(player_id: int) -> void:
 				state.cash += _current_prices[symbol] * pos.quantity
 	state.positions.clear()
 	state.cash = maxf(state.cash, 0.0)
+	# 爆仓保护：钢铁意志等技能保留部分资金
+	var retained := apply_bust_protection(player_id)
+	if retained > 0.0 and state.cash < retained:
+		state.cash = retained
 
 
 ## 获取玩家状态
@@ -187,6 +193,7 @@ func get_all_snapshots() -> Array[PlayerTypes.PlayerSnapshot]:
 func clear_all() -> void:
 	_players.clear()
 	_current_prices.clear()
+	_bust_protection.clear()
 
 
 ## ─── 破产保护机制 ─────────────────────────────────────────────────────────────
@@ -224,6 +231,28 @@ func _hours_between(from: Dictionary, to: Dictionary) -> float:
 	return (to_unix - from_unix) / 3600.0
 
 
+## 硬底线保护：确保保险柜永不被清零
+## 在结算/爆仓后调用，保证至少有一笔现金在保险柜中
+func ensure_safe_box_minimum(profile: PlayerTypes.PlayerProfile) -> void:
+	var has_cash := false
+	for item in profile.safe_box_items:
+		if item.item_type == GameEnums.SafeBoxItemType.CASH and item.amount > 0.0:
+			has_cash = true
+			break
+	if not has_cash:
+		# 硬底线：向保险柜注入最低保底现金
+		var min_item := PlayerTypes.SafeBoxItem.new()
+		min_item.item_type = GameEnums.SafeBoxItemType.CASH
+		min_item.item_id = &"cash"
+		min_item.amount = 1000.0  ## 保底 $1,000
+		if profile.safe_box_items.size() < profile.safe_box_slots:
+			profile.safe_box_items.append(min_item)
+		elif profile.safe_box_items.size() > 0:
+			# 替换最后一个非现金物品或追加
+			profile.safe_box_items.append(min_item)
+		push_warning("PlayerManager: Safe box hard bottom activated — added $1000 minimum")
+
+
 ## ─── 经验值系统 ───────────────────────────────────────────────────────────────
 
 ## 计算本局经验值
@@ -249,3 +278,41 @@ func apply_experience(player_id: int, profile: PlayerTypes.PlayerProfile, exp_ga
 		leveled_up = true
 		level_up.emit(player_id, new_level)
 	return {"leveled_up": leveled_up, "new_level": new_level, "exp_gained": exp_gained}
+
+
+## ─── 技能资金效果（供 WS2 SkillSystem 调用）──────────────────────────────────
+
+## 现金利息："现金为王"技能每 tick 调用
+## rate: 利率（如 0.001 = 每 tick 0.1%）
+func apply_cash_interest(player_id: int, rate: float) -> float:
+	if not _players.has(player_id):
+		return 0.0
+	var state: PlayerStateData = _players[player_id]
+	if state.cash <= 0.0:
+		return 0.0
+	var interest := state.cash * rate
+	state.cash += interest
+	return interest
+
+
+## 注册爆仓保护："钢铁意志"技能入局时调用
+## retain_ratio: 爆仓时保留的资金比例（如 0.1 = 保留 10%）
+func register_bust_protection(player_id: int, retain_ratio: float) -> void:
+	_bust_protection[player_id] = retain_ratio
+
+
+## 获取玩家爆仓保护比例
+func get_bust_protection_ratio(player_id: int) -> float:
+	return _bust_protection.get(player_id, 0.0)
+
+
+## 应用爆仓保护：在 force_liquidate 前调用，返回保护后保留的金额
+func apply_bust_protection(player_id: int) -> float:
+	var ratio: float = _bust_protection.get(player_id, 0.0)
+	if ratio <= 0.0:
+		return 0.0
+	if not _players.has(player_id):
+		return 0.0
+	var state: PlayerStateData = _players[player_id]
+	var retained := state.brought_funds * ratio
+	return retained
