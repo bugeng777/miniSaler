@@ -203,19 +203,25 @@ class EraMechanicsHandler:
 	var _player_passives: Dictionary = {}
 
 	## IPO 狂潮参数
-	const IPO_INTERVAL: float = 45.0  ## 每 45 秒注入一次 IPO 事件
+	const IPO_INTERVAL: float = 60.0  ## 每 60 秒注入一次 IPO 事件（从45调至60）
 	var _next_ipo_time: float = IPO_INTERVAL
 
 	## 汇率战参数
-	const CURRENCY_WAR_INTERVAL: float = 30.0  ## 每 30 秒触发汇率波动
+	const CURRENCY_WAR_INTERVAL: float = 35.0  ## 每 35 秒触发汇率波动（从30调至35）
 	var _next_currency_war_time: float = CURRENCY_WAR_INTERVAL
 	var _currency_pressure: float = 0.0  ## 当前汇率压力值
 
 	## T+1 参数
 	var _today_bought: Dictionary = {}  ## player_id -> Array[StringName] 当天买入的股票
 
+	## 涨跌停板参数（上海2007）
+	const PRICE_LIMIT_PCT: float = 0.10  ## ±10% 涨跌停
+	var _opening_prices: Dictionary = {}  ## symbol -> float 开盘价
+	var _limit_triggered: Dictionary = {}  ## symbol -> {"type": "up"/"down", "remaining": float}
+	const LIMIT_COOLDOWN: float = 30.0  ## 涨跌停冷却时间（秒）
+
 	## 杠杆狂欢参数
-	const LEVERAGE_BONUS_RATIO: float = 0.5  ## 额外可借入资金比例
+	const LEVERAGE_BONUS_RATIO: float = 0.3  ## 额外可借入资金比例（从0.5调至0.3）
 
 	func _init(era: EraData) -> void:
 		_era_config = era
@@ -225,6 +231,8 @@ class EraMechanicsHandler:
 		_currency_pressure = 0.0
 		_today_bought.clear()
 		_player_passives.clear()
+		_opening_prices.clear()
+		_limit_triggered.clear()
 
 	## 注册玩家被动技能（由 GameSession 在 passive_effects_changed 信号时调用）
 	func register_player_passives(player_id: int, passives: Dictionary) -> void:
@@ -241,6 +249,8 @@ class EraMechanicsHandler:
 				&"ipo_frenzy":
 					_update_ipo_frenzy(delta)
 					_check_pre_ipo_item_interaction()
+				&"price_limit":
+					_update_price_limit()
 
 	## 获取当前激活的特殊机制列表
 	func get_active_mechanics() -> Array[StringName]:
@@ -255,12 +265,12 @@ class EraMechanicsHandler:
 		if _elapsed_time >= _next_currency_war_time:
 			_next_currency_war_time = _elapsed_time + CURRENCY_WAR_INTERVAL
 			# 随机汇率压力变化
-			_currency_pressure += randf_range(-0.05, 0.08)
-			_currency_pressure = clampf(_currency_pressure, -0.3, 0.5)
+			_currency_pressure += randf_range(-0.04, 0.06)  ## 从(-0.05,0.08)调至(-0.04,0.06)
+			_currency_pressure = clampf(_currency_pressure, -0.25, 0.4)  ## 从(-0.3,0.5)调至(-0.25,0.4)
 			var data := {
 				"mechanic": "currency_war",
 				"pressure": _currency_pressure,
-				"volatility_boost": abs(_currency_pressure) * 0.5,
+				"volatility_boost": abs(_currency_pressure) * 0.3,  ## 从0.5调至0.3
 			}
 			mechanic_event_triggered.emit(&"currency_war", data)
 
@@ -292,8 +302,14 @@ class EraMechanicsHandler:
 	## 由 NewsSystem 的新闻事件触发，GameSession 调用此方法获取倍率
 	func get_chaebol_news_multiplier() -> float:
 		if has_mechanic(&"chaebol_policy"):
-			return 2.0
+			return 1.5  ## 从2.0调至1.5
 		return 1.0
+
+	## 获取财阀政策影响的板块标识（供 NewsSystem 精确匹配）
+	func get_chaebol_sector() -> String:
+		if has_mechanic(&"chaebol_policy"):
+			return "chaebol"
+		return ""
 
 	## ─── ipo_frenzy（硅谷 2000）：每隔 N 秒注入一次“新公司 IPO”事件 ────────
 	func _update_ipo_frenzy(delta: float) -> void:
@@ -311,7 +327,7 @@ class EraMechanicsHandler:
 				"company_name": pick.get("name", "NewCo"),
 				"sector": pick.get("sector", "internet"),
 				"base_price": pick.get("base_price", 20.0),
-				"hype_multiplier": randf_range(2.0, 5.0),
+				"hype_multiplier": randf_range(1.5, 3.5),  ## 从(2.0,5.0)调至(1.5,3.5)
 			}
 			mechanic_event_triggered.emit(&"ipo_frenzy", data)
 
@@ -337,6 +353,75 @@ class EraMechanicsHandler:
 						"company_name": next_company,
 					}
 					skill_mechanic_interaction.emit(player_id, &"insider_network", interaction)
+
+	## 注册开盘价（GameSession 在交易阶段开始时调用）
+	func register_opening_prices(prices: Dictionary) -> void:
+		_opening_prices = prices.duplicate()
+		_limit_triggered.clear()
+
+	## ─── price_limit（上海 2007）：涨跌停板 ±10% ────────
+	## 每 tick 检查所有股票相对开盘价偏离是否超过阈值
+	func _update_price_limit() -> void:
+		if _opening_prices.is_empty():
+			return
+		# 递减已触发的冷却计时
+		var expired: Array = []
+		for sym in _limit_triggered:
+			_limit_triggered[sym]["remaining"] -= 0.5  ## 假设 tick=0.5s
+			if _limit_triggered[sym]["remaining"] <= 0.0:
+				expired.append(sym)
+		for sym in expired:
+			_limit_triggered.erase(sym)
+		# 检查价格偏离（需要外部传入当前价格，通过 mechanic_event_triggered 请求）
+		# 实际价格检查由 GameSession 调用 check_price_limit(symbol, current_price) 执行
+
+	## 检查单只股票是否触发涨跌停（由 GameSession 每 tick 调用）
+	func check_price_limit(symbol: StringName, current_price: float) -> Dictionary:
+		if not has_mechanic(&"price_limit"):
+			return {}
+		if not _opening_prices.has(symbol):
+			return {}
+		# 如果已在冷却中，返回持续状态
+		if _limit_triggered.has(symbol):
+			return {
+				"symbol": symbol,
+				"limit_type": _limit_triggered[symbol]["type"],
+				"is_limited": true,
+				"remaining": _limit_triggered[sym]["remaining"],
+			}
+		var opening: float = _opening_prices[symbol]
+		if opening <= 0.0:
+			return {}
+		var deviation := (current_price - opening) / opening
+		if deviation >= PRICE_LIMIT_PCT:
+			# 涨停
+			_limit_triggered[symbol] = {"type": "up", "remaining": LIMIT_COOLDOWN}
+			var data := {
+				"symbol": symbol,
+				"limit_type": "up",
+				"deviation": deviation,
+				"is_limited": true,
+				"remaining": LIMIT_COOLDOWN,
+			}
+			mechanic_event_triggered.emit(&"price_limit", data)
+			return data
+		elif deviation <= -PRICE_LIMIT_PCT:
+			# 跌停
+			_limit_triggered[symbol] = {"type": "down", "remaining": LIMIT_COOLDOWN}
+			var data := {
+				"symbol": symbol,
+				"limit_type": "down",
+				"deviation": deviation,
+				"is_limited": true,
+				"remaining": LIMIT_COOLDOWN,
+			}
+			mechanic_event_triggered.emit(&"price_limit", data)
+			return data
+		return {}
+
+	## 查询某只股票当前是否处于涨跌停状态
+	func is_price_limited(symbol: StringName) -> bool:
+		return _limit_triggered.has(symbol)
 
 	## ─── leverage_party（东京 1989）：所有玩家初始可借入额外资金 ────────
 	## GameSession 在准备阶段调用，获取每个玩家的额外借款额度
