@@ -20,6 +20,10 @@ const MSG_ACHIEVEMENT := &"sync_achievement"
 const MSG_CHAT := &"sync_chat"
 const MSG_PLAYER_READY := &"sync_player_ready"
 const MSG_STATE_SYNC := &"sync_state"
+const MSG_LEADERBOARD_SYNC := &"sync_leaderboard"
+const MSG_BOSS_DEFEATED := &"sync_boss_defeated"
+const MSG_SKILL_EFFECT := &"sync_skill_effect"
+const MSG_MATCH_FOUND := &"sync_match_found"
 
 # ─── Client -> Server 请求消息类型 ─────────────────────────────────────────────
 const MSG_SUBMIT_ORDER := &"submit_order"
@@ -108,3 +112,19 @@ static func build_chat_msg(player_id: int, text: String) -> Dictionary:
 
 static func build_player_ready_msg(player_id: int, is_ready: bool) -> Dictionary:
 	return {"msg_type": MSG_PLAYER_READY, "player_id": player_id, "is_ready": is_ready}
+
+
+static func build_match_found_msg(room_id: String, players: Array) -> Dictionary:
+	return {"msg_type": MSG_MATCH_FOUND, "room_id": room_id, "players": players}
+
+
+static func build_boss_defeated_msg(boss_name: String, result: Dictionary) -> Dictionary:
+	return {"msg_type": MSG_BOSS_DEFEATED, "boss_name": boss_name, "result": result}
+
+
+static func build_skill_effect_msg(player_id: int, skill_id: StringName, effect: Dictionary) -> Dictionary:
+	return {"msg_type": MSG_SKILL_EFFECT, "player_id": player_id, "skill_id": skill_id, "effect": effect}
+
+
+static func build_leaderboard_msg(entries: Array) -> Dictionary:
+	return {"msg_type": MSG_LEADERBOARD_SYNC, "entries": entries}

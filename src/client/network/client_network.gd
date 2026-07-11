@@ -20,6 +20,10 @@ signal boss_event_received(data: Dictionary)
 signal settlement_received(data: Dictionary)
 signal chat_received(player_id: int, text: String)
 signal player_ready_received(player_id: int, is_ready: bool)
+signal match_found_received(room_id: String, players: Array)
+signal boss_defeated_received(boss_name: String, result: Dictionary)
+signal skill_effect_received(player_id: int, skill_id: StringName, effect: Dictionary)
+signal leaderboard_received(entries: Array)
 
 
 ## ─── 状态 ────────────────────────────────────────────────────────────────────
@@ -122,6 +126,16 @@ func send_chat_message(text: String) -> void:
 		rpc_id(1, "rpc_chat_message", text)
 
 
+func send_request_match(rank_tier: int) -> void:
+	if _is_connected:
+		rpc_id(1, "rpc_request_match", rank_tier)
+
+
+func send_quick_chat(message_id: int) -> void:
+	if _is_connected:
+		rpc_id(1, "rpc_quick_chat", message_id)
+
+
 ## ─── 接收服务器广播 ──────────────────────────────────────────────────────────
 
 ## 统一广播通道（方法名与 GameSession.rpc_sync_data 一致）
@@ -156,6 +170,14 @@ func rpc_sync_data(msg: Dictionary) -> void:
 			chat_received.emit(msg.get("player_id", 0), msg.get("text", ""))
 		NetworkProtocol.MSG_PLAYER_READY:
 			player_ready_received.emit(msg.get("player_id", 0), msg.get("is_ready", false))
+		NetworkProtocol.MSG_MATCH_FOUND:
+			match_found_received.emit(msg.get("room_id", ""), msg.get("players", []))
+		NetworkProtocol.MSG_BOSS_DEFEATED:
+			boss_defeated_received.emit(msg.get("boss_name", ""), msg.get("result", {}))
+		NetworkProtocol.MSG_SKILL_EFFECT:
+			skill_effect_received.emit(msg.get("player_id", 0), StringName(msg.get("skill_id", "")), msg.get("effect", {}))
+		NetworkProtocol.MSG_LEADERBOARD_SYNC:
+			leaderboard_received.emit(msg.get("entries", []))
 
 
 ## ─── 网络事件回调 ──────────────────────────────────────────────────────────
