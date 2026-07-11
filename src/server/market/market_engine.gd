@@ -160,18 +160,31 @@ func apply_boss_manipulation(symbol: StringName, direction: float, strength: flo
 	_pending_boss_impacts[symbol] = {"direction": direction, "strength": clampf(strength, 0.0, 1.0)}
 
 
-## 根据时代波动特征配置 GARCH 参数
-## 高波动时代（如硅谷2000 vol_mult=1.8）→ 更高基础方差 + 更强冲击反应
-## 低波动时代（如首尔1988 vol_mult=0.8）→ 更平稳的价格演化
+## 任务 3.4: 5 时代 GARCH 参数手工调优表
+## 每个时代的波动"性格"不同，通用公式无法精准模拟，因此用手工参数覆盖
+## omega=基础方差, alpha=冲击反应, beta=波动持续性
+const _ERA_GARCH_PRESETS: Dictionary = {
+	&"hk_1997":      {"omega": 0.000025, "alpha": 0.18, "beta": 0.70},  # 汇率狙击: 高冲击, 低持续
+	&"seoul_1988":   {"omega": 0.000008, "alpha": 0.08, "beta": 0.88},  # 政策驱动: 低波动, 高持续
+	&"silicon_2000": {"omega": 0.000035, "alpha": 0.15, "beta": 0.82},  # 泡沫趋势: 高基础方差, 高持续
+	&"tokyo_1989":   {"omega": 0.000012, "alpha": 0.09, "beta": 0.90},  # 泡沫慢膨胀: 极低冲击, 极高持续
+	&"shanghai_2007":{"omega": 0.000050, "alpha": 0.22, "beta": 0.60},  # 暴涨暴跌: 最高冲击, 最低持续
+}
+
+
+## 根据时代配置 GARCH 参数
+## 优先查找时代专属参数表，未匹配时用通用公式兜底
 func _configure_garch_for_era(era_config: EraData) -> void:
-	var vol_mult := era_config.volatility_multiplier
-	# 基础方差随波动倍率平方缩放
-	var omega := 0.00001 * (vol_mult * vol_mult)
-	# 冲击反应随波动倍率线性增强
-	var alpha := 0.1 * vol_mult
-	# 波动持续性随波动倍率略微降低（高波动市场记忆更短）
-	var beta := clampf(0.85 / (1.0 + (vol_mult - 1.0) * 0.2), 0.6, 0.9)
-	_price_model.configure_garch(omega, alpha, beta)
+	if _ERA_GARCH_PRESETS.has(era_config.era_id):
+		var preset: Dictionary = _ERA_GARCH_PRESETS[era_config.era_id]
+		_price_model.configure_garch(preset["omega"], preset["alpha"], preset["beta"])
+	else:
+		# 兜底: 通用公式（未来新增时代时无需改代码）
+		var vol_mult := era_config.volatility_multiplier
+		var omega := 0.00001 * (vol_mult * vol_mult)
+		var alpha := 0.1 * vol_mult
+		var beta := clampf(0.85 / (1.0 + (vol_mult - 1.0) * 0.2), 0.6, 0.9)
+		_price_model.configure_garch(omega, alpha, beta)
 
 
 ## ─── 内部 tick 处理 ──────────────────────────────────────────────────────────
