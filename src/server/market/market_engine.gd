@@ -25,6 +25,7 @@ var _tick_index: int = 0
 var _elapsed_time: float = 0.0
 var _current_era_config: EraData = null
 var _pending_news_impacts: Dictionary = {}  ## symbol -> impact dict (由 NewsSystem 注入)
+var _pending_boss_impacts: Dictionary = {}  ## symbol -> {direction, strength} (由 BotManager 注入)
 
 
 func _ready() -> void:
@@ -48,6 +49,7 @@ func start_market(era_config: EraData) -> void:
 	_tick_index = 0
 	_elapsed_time = 0.0
 	_pending_news_impacts.clear()
+	_pending_boss_impacts.clear()
 	# 初始化子组件
 	_price_model.initialize_stocks(era_config.stock_configs)
 	_order_book.initialize(era_config.stock_configs)
@@ -149,6 +151,15 @@ func submit_order_priority(player_id: int, symbol: StringName, side: int,
 	return _order_book.submit_order_priority(player_id, symbol, side, order_type, quantity, limit_price)
 
 
+## ─── Phase 3 Boss 价格操纵 ───────────────────────────────────────────────
+
+## Boss 价格操纵接口（由 BotManager 在 Boss 交易时调用）
+## direction: 正=做多压力, 负=做空压力; strength: 操纵强度(0.0~1.0)
+## 每时代 Boss 操纵不同板块: 香港=汇率/金融股, 硅谷=科技股, 东京=银行/地产, 上海=ST股
+func apply_boss_manipulation(symbol: StringName, direction: float, strength: float) -> void:
+	_pending_boss_impacts[symbol] = {"direction": direction, "strength": clampf(strength, 0.0, 1.0)}
+
+
 ## 根据时代波动特征配置 GARCH 参数
 ## 高波动时代（如硅谷2000 vol_mult=1.8）→ 更高基础方差 + 更强冲击反应
 ## 低波动时代（如首尔1988 vol_mult=0.8）→ 更平稳的价格演化
@@ -176,6 +187,12 @@ func _on_tick() -> void:
 		vol_multiplier = _current_era_config.volatility_multiplier
 	var snapshots := _price_model.simulate_tick(vol_multiplier, _pending_news_impacts)
 	_pending_news_impacts.clear()
+
+	# 1.5. 应用 Boss 价格操纵
+	for boss_symbol in _pending_boss_impacts:
+		var impact: Dictionary = _pending_boss_impacts[boss_symbol]
+		_price_model.apply_boss_pressure(boss_symbol, impact.get("direction", 0.0), impact.get("strength", 0.0))
+	_pending_boss_impacts.clear()
 
 	# 2. 更新订单簿价格
 	var prices := _price_model.get_all_prices()

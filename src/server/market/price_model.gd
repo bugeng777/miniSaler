@@ -172,6 +172,20 @@ func _apply_news_impact(state: StockPriceState, impact: Dictionary) -> void:
 			state.garch_variance *= (1.0 + magnitude * 2.0)
 
 
+## 应用 Boss 价格操纵（区别于普通订单，直接施加趋势压力）
+## direction: 正=做多压力, 负=做空压力; strength: 操纵强度(0.0~1.0)
+func apply_boss_pressure(symbol: StringName, direction: float, strength: float) -> void:
+	if not _states.has(symbol):
+		return
+	var state: StockPriceState = _states[symbol]
+	# 施加持续漂移偏移（模拟 Boss 大量买入/卖出的趋势效应）
+	state.drift += direction * strength * 0.005
+	# 增强动量惯性（Boss 行为引发跟随效应）
+	state.momentum += direction * strength * 0.01
+	# 提升波动率（Boss 操纵带来市场不安）
+	state.current_volatility *= (1.0 + strength * 0.3)
+
+
 ## 构建快照
 func _build_snapshot(state: StockPriceState) -> MarketTypes.StockSnapshot:
 	var snap := MarketTypes.StockSnapshot.new()
