@@ -72,6 +72,41 @@ func submit_order(player_id: int, symbol: StringName, side: int,
 	return order_id
 
 
+## 优先下单（供"闪电下单"技能）
+## 与普通下单相同，但限价单挂入簿中时插到同价位最前面
+func submit_order_priority(player_id: int, symbol: StringName, side: int,
+		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+	if not _books.has(symbol):
+		var reject_id := "invalid_symbol"
+		order_rejected.emit(reject_id, "Unknown symbol: " + str(symbol))
+		return reject_id
+
+	_order_counter += 1
+	var order_id := "ord_%d_%d" % [player_id, _order_counter]
+
+	var order := MarketTypes.BookOrder.new()
+	order.order_id = order_id
+	order.player_id = player_id
+	order.symbol = symbol
+	order.side = side
+	order.order_type = order_type
+	order.quantity = quantity
+	order.remaining = quantity
+	order.price = limit_price
+	# 优先订单时间戳设为更早，确保排在同价位最前
+	order.timestamp = Time.get_ticks_msec() / 1000.0 - 0.001
+
+	# 市价单立即撮合（与普通相同）
+	if order_type == GameEnums.OrderType.MARKET:
+		_match_market_order(order)
+	else:
+		_match_limit_order(order)
+		if order.remaining > 0:
+			_add_to_book_priority(order)
+
+	return order_id
+
+
 ## 市价单撮合（逐档吃单，支持滑价）
 ## BUY: 从 ask 侧逐档吃单；SELL: 从 bid 侧逐档吃单
 ## 如果订单簿为空则 fallback 到当前市价成交
@@ -142,21 +177,45 @@ func _match_limit_order(order: MarketTypes.BookOrder) -> void:
 				break
 
 
-## 将未成交的限价单挂入订单簿
+## 将未成交的限价单挂入订单簿（普通：按价格排序）
 func _add_to_book(order: MarketTypes.BookOrder) -> void:
 	var book: BookSide = _books[order.symbol]
 	if order.side == GameEnums.OrderSide.BUY:
 		book.bids.append(order)
-		# 按价格降序排列
 		book.bids.sort_custom(func(a: MarketTypes.BookOrder, b: MarketTypes.BookOrder) -> bool:
 			return a.price > b.price
 		)
 	else:
 		book.asks.append(order)
-		# 按价格升序排列
 		book.asks.sort_custom(func(a: MarketTypes.BookOrder, b: MarketTypes.BookOrder) -> bool:
 			return a.price < b.price
 		)
+
+
+## 将优先订单挂入簿中（插到同价位最前面）
+func _add_to_book_priority(order: MarketTypes.BookOrder) -> void:
+	var book: BookSide = _books[order.symbol]
+	if order.side == GameEnums.OrderSide.BUY:
+		# 找到第一个价格低于或等于本单的位置，插入其前
+		var insert_idx := book.bids.size()
+		for i in range(book.bids.size()):
+			if book.bids[i].price < order.price:
+				insert_idx = i
+				break
+			elif book.bids[i].price == order.price:
+				insert_idx = i  # 同价位插到最前
+				break
+		book.bids.insert(insert_idx, order)
+	else:
+		var insert_idx := book.asks.size()
+		for i in range(book.asks.size()):
+			if book.asks[i].price > order.price:
+				insert_idx = i
+				break
+			elif book.asks[i].price == order.price:
+				insert_idx = i  # 同价位插到最前
+				break
+		book.asks.insert(insert_idx, order)
 
 
 ## 取消挂单

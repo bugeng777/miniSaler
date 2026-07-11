@@ -105,6 +105,50 @@ func get_price_history(symbol: StringName) -> Array[float]:
 	return _price_model.get_price_history(symbol)
 
 
+## ─── Phase 3 技能市场钩子（代理 PriceModel + OrderBook）──────────────
+
+## 获取股票内在价值（供"基本面扫描"技能）
+func get_intrinsic_value(symbol: StringName) -> float:
+	return _price_model.get_intrinsic_value(symbol)
+
+
+## 获取庄家活动（供"庄家追踪"技能）
+## 返回: {"direction": int, "volume": int}
+## direction: 1=大单买入为主, -1=大单卖出为主, 0=无明显方向
+func get_whale_activity(symbol: StringName) -> Dictionary:
+	var depth := _order_book.get_book_depth(symbol, 10)
+	var bid_vol := 0
+	var ask_vol := 0
+	# 统计买卖两侧前 10 档的挂单量
+	for level in depth.get("bids", []):
+		bid_vol += level.get("quantity", 0)
+	for level in depth.get("asks", []):
+		ask_vol += level.get("quantity", 0)
+	# 大额订单阈值: 单侧总量超过 200 股视为大户活动
+	var whale_threshold := 200
+	var direction := 0
+	if bid_vol > whale_threshold and bid_vol > ask_vol * 1.5:
+		direction = 1   # 大户买入
+	elif ask_vol > whale_threshold and ask_vol > bid_vol * 1.5:
+		direction = -1  # 大户卖出
+	return {"direction": direction, "volume": maxi(bid_vol, ask_vol)}
+
+
+## 获取 MA 交叉信号（供"趋势洞察"技能）
+func get_ma_cross_signal(symbol: StringName) -> int:
+	return _price_model.get_ma_cross_signal(symbol)
+
+
+## 快速下单（供"闪电下单"技能，优先撮合）
+func submit_order_priority(player_id: int, symbol: StringName, side: int,
+		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+	if not _is_running:
+		return ""
+	if _circuit_breaker.is_circuit_broken(symbol):
+		return ""
+	return _order_book.submit_order_priority(player_id, symbol, side, order_type, quantity, limit_price)
+
+
 ## 根据时代波动特征配置 GARCH 参数
 ## 高波动时代（如硅谷2000 vol_mult=1.8）→ 更高基础方差 + 更强冲击反应
 ## 低波动时代（如首尔1988 vol_mult=0.8）→ 更平稳的价格演化

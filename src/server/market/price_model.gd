@@ -221,6 +221,56 @@ func configure_garch(omega: float, alpha: float, beta: float) -> void:
 	garch_beta = beta
 
 
+## ─── Phase 3 技能市场钩子 ─────────────────────────────────────────────────────
+
+## 获取股票内在价值（供"基本面扫描"技能调用）
+## 基于均值回归目标价 + 基于波动率的随机偏移
+func get_intrinsic_value(symbol: StringName) -> float:
+	if not _states.has(symbol):
+		return 0.0
+	var state: StockPriceState = _states[symbol]
+	# 内在价值 = 均值回归目标 + 波动率范围内的随机偏移
+	var offset := randfn(0.0, state.base_volatility * state.mean_reversion_target * 0.5)
+	return maxf(state.mean_reversion_target + offset, 0.01)
+
+
+## 获取 MA 交叉信号（供"趋势洞察"技能调用）
+## 返回: -1 = 死叉, 0 = 无信号, 1 = 金叉
+## 基于短期 MA(10) 与长期 MA(30) 的交叉判定
+func get_ma_cross_signal(symbol: StringName) -> int:
+	if not _states.has(symbol):
+		return 0
+	var state: StockPriceState = _states[symbol]
+	var history := state.price_history
+	if history.size() < 32:
+		return 0  # 数据不足
+	# 计算短期 MA(10) 和长期 MA(30)
+	var short_sum := 0.0
+	var long_sum := 0.0
+	var n := history.size()
+	for i in range(n - 10, n):
+		short_sum += history[i]
+	for i in range(n - 30, n):
+		long_sum += history[i]
+	var ma_short := short_sum / 10.0
+	var ma_long := long_sum / 30.0
+	# 计算前一个 tick 的 MA（用于判定交叉）
+	var prev_short_sum := 0.0
+	var prev_long_sum := 0.0
+	for i in range(n - 11, n - 1):
+		prev_short_sum += history[i]
+	for i in range(n - 31, n - 1):
+		prev_long_sum += history[i]
+	var prev_ma_short := prev_short_sum / 10.0
+	var prev_ma_long := prev_long_sum / 30.0
+	# 判定交叉
+	if prev_ma_short <= prev_ma_long and ma_short > ma_long:
+		return 1   # 金叉
+	elif prev_ma_short >= prev_ma_long and ma_short < ma_long:
+		return -1  # 死叉
+	return 0
+
+
 ## 计算恐惧贪婪指数 (0-100, 50=中性)
 func calculate_fear_greed_index() -> float:
 	var total_momentum := 0.0
