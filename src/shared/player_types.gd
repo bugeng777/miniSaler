@@ -180,6 +180,10 @@ class PlayerProfile:
 	var total_busts: int = 0             ## 累计爆仓次数
 	var era_extractions: Dictionary = {} ## era_id -> 该时代撤离成功次数
 	var last_welfare_time: String = ""   ## 上次低保时间（ISO 8601）
+	var total_trades: int = 0              ## 累计交易次数
+	var highest_single_loss: float = 0.0   ## 单局最大亏损（正数表示）
+	var total_short_profit: float = 0.0    ## 累计做空利润
+	var max_streak: int = 0                ## 历史最高连胜
 	var created_at: String = ""
 
 	func get_win_rate() -> float:
@@ -211,6 +215,10 @@ class PlayerProfile:
 			"total_busts": total_busts,
 			"era_extractions": era_extractions,
 			"last_welfare_time": last_welfare_time,
+			"total_trades": total_trades,
+			"highest_single_loss": highest_single_loss,
+			"total_short_profit": total_short_profit,
+			"max_streak": max_streak,
 			"created_at": created_at,
 		}
 
@@ -237,6 +245,10 @@ class PlayerProfile:
 		prof.total_busts = data.get("total_busts", 0)
 		prof.era_extractions = data.get("era_extractions", {})
 		prof.last_welfare_time = data.get("last_welfare_time", "")
+		prof.total_trades = data.get("total_trades", 0)
+		prof.highest_single_loss = data.get("highest_single_loss", 0.0)
+		prof.total_short_profit = data.get("total_short_profit", 0.0)
+		prof.max_streak = data.get("max_streak", 0)
 		prof.created_at = data.get("created_at", "")
 		return prof
 
