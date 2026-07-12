@@ -147,3 +147,24 @@ const STOCK_POOL_SHANGHAI_2007: Array[Dictionary] = [
 	{"symbol": "CNST", "name": "ST长控", "sector": "st", "base_price": 5.0, "volatility": 0.045},
 	{"symbol": "CNSJ", "name": "ST金泰", "sector": "st", "base_price": 3.5, "volatility": 0.048},
 ]
+
+# ─── Phase 3 SkillEffect 契约白名单（TL 冻结锚点）──────────────────────────────
+## 详见 src/shared/skill_types.gd SkillEffect + ALL_SKILL_EFFECTS（WS2 交付）
+## 冻结日期: 2026-07-06 / 审批: TL 架构师
+## 冻结后各组不可自行扩展 effect_type / target，需 TL 审批
+const SKILL_EFFECT_TYPES: Array[StringName] = [
+	&"market_data",     ## WS1 MarketEngine 提供数据（内在价值/MA/大户）
+	&"fund_modifier",   ## WS3 PlayerManager 修改资金/持仓
+	&"order_modifier",  ## WS3 修改订单执行逻辑（速度/批量/止损/手续费）
+	&"ui_display",      ## WS5 UI 显示（恐贪指数/信号/预警/他人方向）
+	&"extraction",      ## WS2 ExtractionEngine 影响撤离窗口
+	&"social",          ## WS2 BotManager 影响其他玩家（假消息/AI跟随）
+]
+
+const SKILL_EFFECT_TARGETS: Array[StringName] = [
+	&"player",          ## 作用于本玩家自身
+	&"market",          ## 作用于全局市场数据
+	&"opponents",       ## 影响其他玩家（AI/真人）
+	&"extraction",      ## 作用于撤离系统
+	&"specific_stock",  ## 作用于单只股票
+]

@@ -16,6 +16,7 @@ func register_screen(name: String, screen: Control) -> void:
 	_screens[name] = screen
 	screen.visible = false
 	add_child(screen)
+	screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 
 ## 显示屏幕（替换当前）

@@ -19,6 +19,9 @@ enum SfxType {
 }
 
 
+## 音效流缓存
+var _streams: Dictionary = {}  ## SfxType -> AudioStream
+
 ## 音效播放器池
 var _players: Array[AudioStreamPlayer] = []
 const MAX_PLAYERS := 8
@@ -30,6 +33,27 @@ func _ready() -> void:
 		player.bus = "Master"
 		add_child(player)
 		_players.append(player)
+	# 预加载所有音效文件
+	_preload_streams()
+
+
+## 预加载音效流
+func _preload_streams() -> void:
+	var sfx_names := {
+		SfxType.BUY: "buy",
+		SfxType.SELL: "sell",
+		SfxType.EXTRACTION_SUCCESS: "extraction_success",
+		SfxType.BUST: "bust",
+		SfxType.NEWS_ALERT: "news_alert",
+		SfxType.BLACK_SWAN: "black_swan",
+		SfxType.BOSS_ENTER: "boss_enter",
+		SfxType.WINDOW_OPEN: "window_open",
+		SfxType.TICK: "tick",
+	}
+	for sfx_type in sfx_names:
+		var path := "res://assets/audio/%s.wav" % sfx_names[sfx_type]
+		if ResourceLoader.exists(path):
+			_streams[sfx_type] = load(path)
 
 
 ## 播放音效
@@ -37,9 +61,9 @@ func play_sfx(sfx_type: int) -> void:
 	var player := _get_available_player()
 	if not player:
 		return
-	# TODO: 加载实际音效文件后替换
-	# player.stream = load("res://assets/audio/%s.ogg" % _get_sfx_path(sfx_type))
-	# player.play()
+	if _streams.has(sfx_type):
+		player.stream = _streams[sfx_type]
+		player.play()
 
 
 ## 播放盈利音效
@@ -69,17 +93,3 @@ func _get_available_player() -> AudioStreamPlayer:
 			return player
 	return null
 
-
-## 获取音效资源路径
-func _get_sfx_path(sfx_type: int) -> String:
-	match sfx_type:
-		SfxType.BUY: return "buy"
-		SfxType.SELL: return "sell"
-		SfxType.EXTRACTION_SUCCESS: return "extraction_success"
-		SfxType.BUST: return "bust"
-		SfxType.NEWS_ALERT: return "news_alert"
-		SfxType.BLACK_SWAN: return "black_swan"
-		SfxType.BOSS_ENTER: return "boss_enter"
-		SfxType.WINDOW_OPEN: return "window_open"
-		SfxType.TICK: return "tick"
-	return "tick"

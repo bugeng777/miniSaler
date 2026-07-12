@@ -40,14 +40,17 @@ func update_prices(prices: Dictionary) -> void:
 
 ## 提交订单
 func submit_order(player_id: int, symbol: StringName, side: int,
-		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
 	if not _books.has(symbol):
 		var reject_id := "invalid_symbol"
 		order_rejected.emit(reject_id, "Unknown symbol: " + str(symbol))
 		return reject_id
 
 	_order_counter += 1
-	var order_id := "ord_%d_%d" % [player_id, _order_counter]
+	var order_id := requested_order_id
+	if order_id.is_empty():
+		order_id = "ord_%d_%d" % [player_id, _order_counter]
 
 	var order := MarketTypes.BookOrder.new()
 	order.order_id = order_id
@@ -72,16 +75,76 @@ func submit_order(player_id: int, symbol: StringName, side: int,
 	return order_id
 
 
-## 市价单撮合
+## 优先下单（供"闪电下单"技能）
+## 与普通下单相同，但限价单挂入簿中时插到同价位最前面
+func submit_order_priority(player_id: int, symbol: StringName, side: int,
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
+	if not _books.has(symbol):
+		var reject_id := "invalid_symbol"
+		order_rejected.emit(reject_id, "Unknown symbol: " + str(symbol))
+		return reject_id
+
+	_order_counter += 1
+	var order_id := requested_order_id
+	if order_id.is_empty():
+		order_id = "ord_%d_%d" % [player_id, _order_counter]
+
+	var order := MarketTypes.BookOrder.new()
+	order.order_id = order_id
+	order.player_id = player_id
+	order.symbol = symbol
+	order.side = side
+	order.order_type = order_type
+	order.quantity = quantity
+	order.remaining = quantity
+	order.price = limit_price
+	# 优先订单时间戳设为更早，确保排在同价位最前
+	order.timestamp = Time.get_ticks_msec() / 1000.0 - 0.001
+
+	# 市价单立即撮合（与普通相同）
+	if order_type == GameEnums.OrderType.MARKET:
+		_match_market_order(order)
+	else:
+		_match_limit_order(order)
+		if order.remaining > 0:
+			_add_to_book_priority(order)
+
+	return order_id
+
+
+## 市价单撮合（逐档吃单，支持滑价）
+## BUY: 从 ask 侧逐档吃单；SELL: 从 bid 侧逐档吃单
+## 如果订单簿为空则 fallback 到当前市价成交
 func _match_market_order(order: MarketTypes.BookOrder) -> void:
-	if not _current_prices.has(order.symbol):
-		order_rejected.emit(order.order_id, "No price available")
+	if not _books.has(order.symbol):
+		order_rejected.emit(order.order_id, "Unknown symbol: " + str(order.symbol))
 		return
 
-	var fill_price := _current_prices[order.symbol]
-	# 市价单全部成交（简化模型：无流动性限制）
-	order.remaining = 0
-	order_filled.emit(order, fill_price, order.quantity)
+	var book: BookSide = _books[order.symbol]
+	var is_buy := order.side == GameEnums.OrderSide.BUY
+	var opposite_side: Array[MarketTypes.BookOrder] = book.asks if is_buy else book.bids
+
+	# 逐档撮合
+	while order.remaining > 0 and opposite_side.size() > 0:
+		var best: MarketTypes.BookOrder = opposite_side[0]
+		var fill_qty := mini(order.remaining, best.remaining)
+		best.remaining -= fill_qty
+		order.remaining -= fill_qty
+		_emit_fill(order, best.price, fill_qty)
+		_emit_fill(best, best.price, fill_qty)
+		if best.remaining <= 0:
+			opposite_side.pop_front()
+
+	# 订单簿无挂单时 fallback 到当前市价成交
+	if order.remaining > 0:
+		if _current_prices.has(order.symbol):
+			var fallback_price: float = _current_prices[order.symbol]
+			var remaining_qty := order.remaining
+			order.remaining = 0
+			order_filled.emit(order, fallback_price, remaining_qty)
+		else:
+			order_rejected.emit(order.order_id, "No price available and order book empty")
 
 
 ## 限价单撮合
@@ -98,7 +161,8 @@ func _match_limit_order(order: MarketTypes.BookOrder) -> void:
 				var fill_qty := mini(order.remaining, best_ask.remaining)
 				best_ask.remaining -= fill_qty
 				order.remaining -= fill_qty
-				order_filled.emit(order, best_ask.price, fill_qty)
+				_emit_fill(order, best_ask.price, fill_qty)
+				_emit_fill(best_ask, best_ask.price, fill_qty)
 				if best_ask.remaining <= 0:
 					book.asks.pop_front()
 			else:
@@ -111,28 +175,60 @@ func _match_limit_order(order: MarketTypes.BookOrder) -> void:
 				var fill_qty := mini(order.remaining, best_bid.remaining)
 				best_bid.remaining -= fill_qty
 				order.remaining -= fill_qty
-				order_filled.emit(order, best_bid.price, fill_qty)
+				_emit_fill(order, best_bid.price, fill_qty)
+				_emit_fill(best_bid, best_bid.price, fill_qty)
 				if best_bid.remaining <= 0:
 					book.bids.pop_front()
 			else:
 				break
 
 
-## 将未成交的限价单挂入订单簿
+func _emit_fill(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+	if order.remaining > 0:
+		order_partially_filled.emit(order, fill_price, fill_qty)
+	else:
+		order_filled.emit(order, fill_price, fill_qty)
+
+
+## 将未成交的限价单挂入订单簿（普通：按价格排序）
 func _add_to_book(order: MarketTypes.BookOrder) -> void:
 	var book: BookSide = _books[order.symbol]
 	if order.side == GameEnums.OrderSide.BUY:
 		book.bids.append(order)
-		# 按价格降序排列
 		book.bids.sort_custom(func(a: MarketTypes.BookOrder, b: MarketTypes.BookOrder) -> bool:
 			return a.price > b.price
 		)
 	else:
 		book.asks.append(order)
-		# 按价格升序排列
 		book.asks.sort_custom(func(a: MarketTypes.BookOrder, b: MarketTypes.BookOrder) -> bool:
 			return a.price < b.price
 		)
+
+
+## 将优先订单挂入簿中（插到同价位最前面）
+func _add_to_book_priority(order: MarketTypes.BookOrder) -> void:
+	var book: BookSide = _books[order.symbol]
+	if order.side == GameEnums.OrderSide.BUY:
+		# 找到第一个价格低于或等于本单的位置，插入其前
+		var insert_idx := book.bids.size()
+		for i in range(book.bids.size()):
+			if book.bids[i].price < order.price:
+				insert_idx = i
+				break
+			elif book.bids[i].price == order.price:
+				insert_idx = i  # 同价位插到最前
+				break
+		book.bids.insert(insert_idx, order)
+	else:
+		var insert_idx := book.asks.size()
+		for i in range(book.asks.size()):
+			if book.asks[i].price > order.price:
+				insert_idx = i
+				break
+			elif book.asks[i].price == order.price:
+				insert_idx = i  # 同价位插到最前
+				break
+		book.asks.insert(insert_idx, order)
 
 
 ## 取消挂单

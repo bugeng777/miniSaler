@@ -10,6 +10,9 @@ class_name MarketEngine
 signal tick_complete(stock_snapshots: Array[MarketTypes.StockSnapshot], fear_greed_index: float)
 signal circuit_breaker_triggered(symbol: StringName, duration: float)
 signal market_phase_changed(phase: StringName)
+## MD-04 修复：转发 OrderBook.order_filled，供 WS4 GameSession 连接（消除 OrderBook 直引）
+signal order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int)
+signal order_partially_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int)
 
 ## ─── 内部组件 ──────────────────────────────────────────────────────────────
 var _price_model: PriceModel = PriceModel.new()
@@ -23,6 +26,7 @@ var _tick_index: int = 0
 var _elapsed_time: float = 0.0
 var _current_era_config: EraData = null
 var _pending_news_impacts: Dictionary = {}  ## symbol -> impact dict (由 NewsSystem 注入)
+var _pending_boss_impacts: Dictionary = {}  ## symbol -> {direction, strength} (由 BotManager 注入)
 
 
 func _ready() -> void:
@@ -34,6 +38,13 @@ func _ready() -> void:
 	_circuit_breaker.breaker_triggered.connect(func(sym: StringName, dur: float) -> void:
 		circuit_breaker_triggered.emit(sym, dur)
 	)
+	# MD-04：转发 OrderBook 成交信号，WS4 通过此信号获取成交数据
+	_order_book.order_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+		order_filled_passthrough.emit(order, fill_price, fill_qty)
+	)
+	_order_book.order_partially_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+		order_partially_filled_passthrough.emit(order, fill_price, fill_qty)
+	)
 
 
 ## 启动市场（由 GameSession 调用）
@@ -42,10 +53,13 @@ func start_market(era_config: EraData) -> void:
 	_tick_index = 0
 	_elapsed_time = 0.0
 	_pending_news_impacts.clear()
+	_pending_boss_impacts.clear()
 	# 初始化子组件
 	_price_model.initialize_stocks(era_config.stock_configs)
 	_order_book.initialize(era_config.stock_configs)
 	_circuit_breaker.initialize(era_config.stock_configs)
+	# 任务 2.1: 根据时代波动特征配置 GARCH 参数
+	_configure_garch_for_era(era_config)
 	# 开始 tick
 	_is_running = true
 	_tick_timer.start()
@@ -66,12 +80,14 @@ func inject_news_impact(symbol: StringName, impact: Dictionary) -> void:
 
 ## 提交订单（由 GameSession 转发玩家/Bot 的订单）
 func submit_order(player_id: int, symbol: StringName, side: int,
-		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
 	if not _is_running:
 		return ""
 	if _circuit_breaker.is_circuit_broken(symbol):
 		return ""  # 熔断中不可交易
-	return _order_book.submit_order(player_id, symbol, side, order_type, quantity, limit_price)
+	return _order_book.submit_order(player_id, symbol, side, order_type, quantity,
+		limit_price, requested_order_id)
 
 
 ## 获取 OrderBook 引用（供 GameSession 读取深度等）
@@ -97,6 +113,88 @@ func get_price_history(symbol: StringName) -> Array[float]:
 	return _price_model.get_price_history(symbol)
 
 
+## ─── Phase 3 技能市场钩子（代理 PriceModel + OrderBook）──────────────
+
+## 获取股票内在价值（供"基本面扫描"技能）
+func get_intrinsic_value(symbol: StringName) -> float:
+	return _price_model.get_intrinsic_value(symbol)
+
+
+## 获取庄家活动（供"庄家追踪"技能）
+## 返回: {"direction": int, "volume": int}
+## direction: 1=大单买入为主, -1=大单卖出为主, 0=无明显方向
+func get_whale_activity(symbol: StringName) -> Dictionary:
+	var depth := _order_book.get_book_depth(symbol, 10)
+	var bid_vol := 0
+	var ask_vol := 0
+	# 统计买卖两侧前 10 档的挂单量
+	for level in depth.get("bids", []):
+		bid_vol += level.get("quantity", 0)
+	for level in depth.get("asks", []):
+		ask_vol += level.get("quantity", 0)
+	# 大额订单阈值: 单侧总量超过 200 股视为大户活动
+	var whale_threshold := 200
+	var direction := 0
+	if bid_vol > whale_threshold and bid_vol > ask_vol * 1.5:
+		direction = 1   # 大户买入
+	elif ask_vol > whale_threshold and ask_vol > bid_vol * 1.5:
+		direction = -1  # 大户卖出
+	return {"direction": direction, "volume": maxi(bid_vol, ask_vol)}
+
+
+## 获取 MA 交叉信号（供"趋势洞察"技能）
+func get_ma_cross_signal(symbol: StringName) -> int:
+	return _price_model.get_ma_cross_signal(symbol)
+
+
+## 快速下单（供"闪电下单"技能，优先撮合）
+func submit_order_priority(player_id: int, symbol: StringName, side: int,
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
+	if not _is_running:
+		return ""
+	if _circuit_breaker.is_circuit_broken(symbol):
+		return ""
+	return _order_book.submit_order_priority(player_id, symbol, side, order_type, quantity,
+		limit_price, requested_order_id)
+
+
+## ─── Phase 3 Boss 价格操纵 ───────────────────────────────────────────────
+
+## Boss 价格操纵接口（由 BotManager 在 Boss 交易时调用）
+## direction: 正=做多压力, 负=做空压力; strength: 操纵强度(0.0~1.0)
+## 每时代 Boss 操纵不同板块: 香港=汇率/金融股, 硅谷=科技股, 东京=银行/地产, 上海=ST股
+func apply_boss_manipulation(symbol: StringName, direction: float, strength: float) -> void:
+	_pending_boss_impacts[symbol] = {"direction": direction, "strength": clampf(strength, 0.0, 1.0)}
+
+
+## 任务 3.4: 5 时代 GARCH 参数手工调优表
+## 每个时代的波动"性格"不同，通用公式无法精准模拟，因此用手工参数覆盖
+## omega=基础方差, alpha=冲击反应, beta=波动持续性
+const _ERA_GARCH_PRESETS: Dictionary = {
+	&"hk_1997":      {"omega": 0.000025, "alpha": 0.18, "beta": 0.70},  # 汇率狙击: 高冲击, 低持续
+	&"seoul_1988":   {"omega": 0.000008, "alpha": 0.08, "beta": 0.88},  # 政策驱动: 低波动, 高持续
+	&"silicon_2000": {"omega": 0.000035, "alpha": 0.15, "beta": 0.82},  # 泡沫趋势: 高基础方差, 高持续
+	&"tokyo_1989":   {"omega": 0.000012, "alpha": 0.09, "beta": 0.90},  # 泡沫慢膨胀: 极低冲击, 极高持续
+	&"shanghai_2007":{"omega": 0.000050, "alpha": 0.22, "beta": 0.60},  # 暴涨暴跌: 最高冲击, 最低持续
+}
+
+
+## 根据时代配置 GARCH 参数
+## 优先查找时代专属参数表，未匹配时用通用公式兜底
+func _configure_garch_for_era(era_config: EraData) -> void:
+	if _ERA_GARCH_PRESETS.has(era_config.era_id):
+		var preset: Dictionary = _ERA_GARCH_PRESETS[era_config.era_id]
+		_price_model.configure_garch(preset["omega"], preset["alpha"], preset["beta"])
+	else:
+		# 兜底: 通用公式（未来新增时代时无需改代码）
+		var vol_mult := era_config.volatility_multiplier
+		var omega := 0.00001 * (vol_mult * vol_mult)
+		var alpha := 0.1 * vol_mult
+		var beta := clampf(0.85 / (1.0 + (vol_mult - 1.0) * 0.2), 0.6, 0.9)
+		_price_model.configure_garch(omega, alpha, beta)
+
+
 ## ─── 内部 tick 处理 ──────────────────────────────────────────────────────────
 func _on_tick() -> void:
 	if not _is_running:
@@ -110,6 +208,12 @@ func _on_tick() -> void:
 		vol_multiplier = _current_era_config.volatility_multiplier
 	var snapshots := _price_model.simulate_tick(vol_multiplier, _pending_news_impacts)
 	_pending_news_impacts.clear()
+
+	# 1.5. 应用 Boss 价格操纵
+	for boss_symbol in _pending_boss_impacts:
+		var impact: Dictionary = _pending_boss_impacts[boss_symbol]
+		_price_model.apply_boss_pressure(boss_symbol, impact.get("direction", 0.0), impact.get("strength", 0.0))
+	_pending_boss_impacts.clear()
 
 	# 2. 更新订单簿价格
 	var prices := _price_model.get_all_prices()

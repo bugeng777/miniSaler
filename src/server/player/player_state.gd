@@ -92,6 +92,22 @@ func reduce_position(symbol: StringName, quantity: int, sell_price: float) -> fl
 	return pnl
 
 
+## 回补做空持仓（买入成交时调用）
+func cover_short(symbol: StringName, quantity: int, cover_price: float) -> float:
+	if not positions.has(symbol):
+		return 0.0
+	var pos: PlayerTypes.Position = positions[symbol]
+	if not pos.is_short:
+		return 0.0
+	var actual_qty := mini(quantity, pos.quantity)
+	var pnl := (pos.avg_price - cover_price) * actual_qty
+	pos.realized_pnl += pnl
+	pos.quantity -= actual_qty
+	if pos.quantity <= 0:
+		positions.erase(symbol)
+	return pnl
+
+
 ## 生成快照
 func to_snapshot(prices: Dictionary) -> PlayerTypes.PlayerSnapshot:
 	var snap := PlayerTypes.PlayerSnapshot.new()

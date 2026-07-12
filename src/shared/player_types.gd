@@ -59,7 +59,9 @@ class Position:
 
 	func get_market_value(current_price: float) -> float:
 		if is_short:
-			return avg_price * quantity - current_price * quantity
+			# 卖空成交所得已经计入现金；持仓市值必须表示回补负债，
+			# 否则总资产会把卖空所得重复计算一次。
+			return -current_price * quantity
 		else:
 			return current_price * quantity
 
@@ -176,6 +178,14 @@ class PlayerProfile:
 	var skill_progress: Dictionary = {}  ## skill_id -> SkillProgress.to_dict()
 	var player_level: int = 1
 	var player_exp: int = 0
+	var current_streak: int = 0         ## 当前连续撤离成功次数
+	var total_busts: int = 0             ## 累计爆仓次数
+	var era_extractions: Dictionary = {} ## era_id -> 该时代撤离成功次数
+	var last_welfare_time: String = ""   ## 上次低保时间（ISO 8601）
+	var total_trades: int = 0              ## 累计交易次数
+	var highest_single_loss: float = 0.0   ## 单局最大亏损（正数表示）
+	var total_short_profit: float = 0.0    ## 累计做空利润
+	var max_streak: int = 0                ## 历史最高连胜
 	var created_at: String = ""
 
 	func get_win_rate() -> float:
@@ -203,6 +213,14 @@ class PlayerProfile:
 			"skill_progress": skill_progress,
 			"player_level": player_level,
 			"player_exp": player_exp,
+			"current_streak": current_streak,
+			"total_busts": total_busts,
+			"era_extractions": era_extractions,
+			"last_welfare_time": last_welfare_time,
+			"total_trades": total_trades,
+			"highest_single_loss": highest_single_loss,
+			"total_short_profit": total_short_profit,
+			"max_streak": max_streak,
 			"created_at": created_at,
 		}
 
@@ -225,5 +243,50 @@ class PlayerProfile:
 		prof.skill_progress = data.get("skill_progress", {})
 		prof.player_level = data.get("player_level", 1)
 		prof.player_exp = data.get("player_exp", 0)
+		prof.current_streak = data.get("current_streak", 0)
+		prof.total_busts = data.get("total_busts", 0)
+		prof.era_extractions = data.get("era_extractions", {})
+		prof.last_welfare_time = data.get("last_welfare_time", "")
+		prof.total_trades = data.get("total_trades", 0)
+		prof.highest_single_loss = data.get("highest_single_loss", 0.0)
+		prof.total_short_profit = data.get("total_short_profit", 0.0)
+		prof.max_streak = data.get("max_streak", 0)
 		prof.created_at = data.get("created_at", "")
 		return prof
+
+## 排行榜条目
+class LeaderboardEntry:
+	var player_name: String = ""
+	var total_profit: float = 0.0
+	var total_games: int = 0
+	var total_extractions: int = 0
+	var rank_points: int = 0
+	var rank_tier: int = GameEnums.RankTier.BRONZE
+	var season_id: String = ""  ## 赛季标识（如 "2026-07"）
+
+	func get_win_rate() -> float:
+		if total_games == 0:
+			return 0.0
+		return float(total_extractions) / float(total_games)
+
+	func to_dict() -> Dictionary:
+		return {
+			"player_name": player_name,
+			"total_profit": total_profit,
+			"total_games": total_games,
+			"total_extractions": total_extractions,
+			"rank_points": rank_points,
+			"rank_tier": rank_tier,
+			"season_id": season_id,
+		}
+
+	static func from_dict(data: Dictionary) -> LeaderboardEntry:
+		var e := LeaderboardEntry.new()
+		e.player_name = data.get("player_name", "")
+		e.total_profit = data.get("total_profit", 0.0)
+		e.total_games = data.get("total_games", 0)
+		e.total_extractions = data.get("total_extractions", 0)
+		e.rank_points = data.get("rank_points", 0)
+		e.rank_tier = data.get("rank_tier", GameEnums.RankTier.BRONZE)
+		e.season_id = data.get("season_id", "")
+		return e

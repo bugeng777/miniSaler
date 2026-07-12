@@ -25,6 +25,7 @@ var _elapsed_time: float = 0.0
 var _extracted_players: Dictionary = {}  ## player_id -> bool
 ## 已爆仓玩家集合
 var _busted_players: Dictionary = {}  ## player_id -> bool
+var _window_extensions: Dictionary = {}  ## player_id -> extra seconds
 
 
 ## 启动撤离引擎（每局开始时调用）
@@ -74,6 +75,15 @@ func trigger_emergency_window() -> void:
 func extend_window(extra_seconds: float) -> void:
 	if _is_window_open:
 		_window_remaining += extra_seconds
+
+
+## 注册玩家的被动窗口加成；全局窗口取所有参与者中的最大值，避免多人叠加。
+func register_window_extension(player_id: int, extra_seconds: float) -> void:
+	_window_extensions[player_id] = maxf(extra_seconds, 0.0)
+
+
+func clear_window_extension(player_id: int) -> void:
+	_window_extensions.erase(player_id)
 
 
 ## 尝试撤离
@@ -129,8 +139,11 @@ func get_result(player_id: int) -> int:
 ## ─── 内部方法 ──────────────────────────────────────────────────────────────────
 func _open_window(duration: float) -> void:
 	_is_window_open = true
-	_window_remaining = duration
-	extraction_window_opened.emit(duration)
+	var passive_extension := 0.0
+	for extra in _window_extensions.values():
+		passive_extension = maxf(passive_extension, float(extra))
+	_window_remaining = duration + passive_extension
+	extraction_window_opened.emit(_window_remaining)
 
 
 func _close_window() -> void:

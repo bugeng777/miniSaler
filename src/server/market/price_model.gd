@@ -9,6 +9,8 @@ class_name PriceModel
 ## 单只股票的价格状态
 class StockPriceState:
 	var symbol: StringName = &""
+	var stock_name: String = ""     ## 股票显示名称（如"恒基地产"）
+	var sector: String = ""         ## 股票板块（如 "realestate"）
 	var current_price: float = 0.0
 	var open_price: float = 0.0
 	var high_price: float = 0.0
@@ -38,10 +40,11 @@ class StockPriceState:
 		garch_variance = base_vol * base_vol
 
 
-## GARCH(1,1) 参数
-const GARCH_OMEGA: float = 0.00001   ## 常数项
-const GARCH_ALPHA: float = 0.1       ## ARCH 项系数（冲击反应）
-const GARCH_BETA: float = 0.85       ## GARCH 项系数（波动持续性）
+## GARCH(1,1) 参数（可通过 configure_garch() 按时代调整）
+## 参考: modelDesign.md Ch.11 价格形成机制
+var garch_omega: float = 0.00001   ## 常数项（基础方差）
+var garch_alpha: float = 0.1       ## ARCH 项系数（冲击反应）
+var garch_beta: float = 0.85       ## GARCH 项系数（波动持续性）
 
 ## 均值回归参数
 const MEAN_REVERSION_SPEED: float = 0.005  ## 回归速度
@@ -61,6 +64,8 @@ func initialize_stocks(stock_configs: Array[Dictionary]) -> void:
 	for cfg in stock_configs:
 		var state := StockPriceState.new()
 		state.symbol = StringName(cfg.get("symbol", ""))
+		state.stock_name = cfg.get("name", "")
+		state.sector = cfg.get("sector", "")
 		state.reset(
 			cfg.get("base_price", 100.0),
 			cfg.get("volatility", 0.02)
@@ -99,7 +104,7 @@ func _update_garch(state: StockPriceState, vol_multiplier: float) -> void:
 		if prev > 0.0:
 			returns = (state.current_price - prev) / prev
 	# GARCH(1,1): sigma^2_t = omega + alpha * r^2_{t-1} + beta * sigma^2_{t-1}
-	state.garch_variance = GARCH_OMEGA + GARCH_ALPHA * returns * returns + GARCH_BETA * state.garch_variance
+	state.garch_variance = garch_omega + garch_alpha * returns * returns + garch_beta * state.garch_variance
 	state.current_volatility = sqrt(state.garch_variance) * vol_multiplier
 	# 限制波动率范围
 	state.current_volatility = clampf(state.current_volatility, 0.001, 0.1)
@@ -167,10 +172,26 @@ func _apply_news_impact(state: StockPriceState, impact: Dictionary) -> void:
 			state.garch_variance *= (1.0 + magnitude * 2.0)
 
 
+## 应用 Boss 价格操纵（区别于普通订单，直接施加趋势压力）
+## direction: 正=做多压力, 负=做空压力; strength: 操纵强度(0.0~1.0)
+func apply_boss_pressure(symbol: StringName, direction: float, strength: float) -> void:
+	if not _states.has(symbol):
+		return
+	var state: StockPriceState = _states[symbol]
+	# 施加持续漂移偏移（模拟 Boss 大量买入/卖出的趋势效应）
+	state.drift += direction * strength * 0.005
+	# 增强动量惯性（Boss 行为引发跟随效应）
+	state.momentum += direction * strength * 0.01
+	# 提升波动率（Boss 操纵带来市场不安）
+	state.current_volatility *= (1.0 + strength * 0.3)
+
+
 ## 构建快照
 func _build_snapshot(state: StockPriceState) -> MarketTypes.StockSnapshot:
 	var snap := MarketTypes.StockSnapshot.new()
 	snap.symbol = state.symbol
+	snap.name = state.stock_name
+	snap.sector = state.sector
 	snap.open = state.open_price
 	snap.high = state.high_price
 	snap.low = state.low_price
@@ -205,6 +226,63 @@ func get_price_history(symbol: StringName) -> Array[float]:
 		var state: StockPriceState = _states[symbol]
 		return state.price_history
 	return []
+
+
+## 配置 GARCH 参数（由 MarketEngine 根据时代配置调用）
+func configure_garch(omega: float, alpha: float, beta: float) -> void:
+	garch_omega = omega
+	garch_alpha = alpha
+	garch_beta = beta
+
+
+## ─── Phase 3 技能市场钩子 ─────────────────────────────────────────────────────
+
+## 获取股票内在价值（供"基本面扫描"技能调用）
+## 基于均值回归目标价 + 基于波动率的随机偏移
+func get_intrinsic_value(symbol: StringName) -> float:
+	if not _states.has(symbol):
+		return 0.0
+	var state: StockPriceState = _states[symbol]
+	# 内在价值 = 均值回归目标 + 波动率范围内的随机偏移
+	var offset := randfn(0.0, state.base_volatility * state.mean_reversion_target * 0.5)
+	return maxf(state.mean_reversion_target + offset, 0.01)
+
+
+## 获取 MA 交叉信号（供"趋势洞察"技能调用）
+## 返回: -1 = 死叉, 0 = 无信号, 1 = 金叉
+## 基于短期 MA(10) 与长期 MA(30) 的交叉判定
+func get_ma_cross_signal(symbol: StringName) -> int:
+	if not _states.has(symbol):
+		return 0
+	var state: StockPriceState = _states[symbol]
+	var history := state.price_history
+	if history.size() < 32:
+		return 0  # 数据不足
+	# 计算短期 MA(10) 和长期 MA(30)
+	var short_sum := 0.0
+	var long_sum := 0.0
+	var n := history.size()
+	for i in range(n - 10, n):
+		short_sum += history[i]
+	for i in range(n - 30, n):
+		long_sum += history[i]
+	var ma_short := short_sum / 10.0
+	var ma_long := long_sum / 30.0
+	# 计算前一个 tick 的 MA（用于判定交叉）
+	var prev_short_sum := 0.0
+	var prev_long_sum := 0.0
+	for i in range(n - 11, n - 1):
+		prev_short_sum += history[i]
+	for i in range(n - 31, n - 1):
+		prev_long_sum += history[i]
+	var prev_ma_short := prev_short_sum / 10.0
+	var prev_ma_long := prev_long_sum / 30.0
+	# 判定交叉
+	if prev_ma_short <= prev_ma_long and ma_short > ma_long:
+		return 1   # 金叉
+	elif prev_ma_short >= prev_ma_long and ma_short < ma_long:
+		return -1  # 死叉
+	return 0
 
 
 ## 计算恐惧贪婪指数 (0-100, 50=中性)
