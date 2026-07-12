@@ -5,6 +5,7 @@ extends Control
 class_name LeaderboardScreen
 
 signal sort_changed(sort_key: StringName)
+signal back_requested()
 
 ## 排序维度
 enum SortKey { PROFIT, WIN_RATE, RANK_TIER, TOTAL_EXTRACTIONS }
@@ -81,6 +82,10 @@ func _build_ui() -> void:
 
 	# 初始高亮
 	_update_sort_highlight()
+	var back := Button.new()
+	back.text = "◀ 返回"
+	back.pressed.connect(func(): back_requested.emit())
+	main_vbox.add_child(back)
 
 
 ## 切换排序维度

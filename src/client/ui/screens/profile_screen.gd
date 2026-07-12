@@ -3,6 +3,8 @@
 extends Control
 class_name ProfileScreen
 
+signal back_requested()
+
 var _stats_container: VBoxContainer = null
 var _safebox_container: GridContainer = null
 
@@ -33,6 +35,11 @@ func _build_ui() -> void:
 	_safebox_container.columns = 3
 	_safebox_container.position = Vector2(40, 340)
 	add_child(_safebox_container)
+	var back := Button.new()
+	back.text = "◀ 返回"
+	back.position = Vector2(40, 520)
+	back.pressed.connect(func(): back_requested.emit())
+	add_child(back)
 
 
 func load_profile(profile: PlayerTypes.PlayerProfile) -> void:

@@ -182,7 +182,9 @@ static func _apply_to_node(node: Node) -> void:
 		if node is PanelContainer:
 			var panel: PanelContainer = node as PanelContainer
 			# 默认用 RPG 框
-			panel.add_theme_stylebox_override("panel", create_rpg_panel())
+			# 保留组件主动设置的 highlight/warning/simple 样式，避免全局主题覆盖语义色。
+			if not panel.has_theme_stylebox_override("panel"):
+				panel.add_theme_stylebox_override("panel", create_rpg_panel())
 
 	# 递归子节点
 	for child in node.get_children():
@@ -191,7 +193,8 @@ static func _apply_to_node(node: Node) -> void:
 
 ## 为 Control 节点应用像素字体
 static func _apply_pixel_font(ctrl: Control) -> void:
-	var font := get_pixel_font_en()
+	# Zpix 同时覆盖中文、英文和数字。此前强制使用 m5x7 会让中文全部变成空白。
+	var font := get_pixel_font_cn()
 	if font:
 		ctrl.add_theme_font_override("font", font)
 
@@ -249,19 +252,19 @@ static func wrap_with_outer_frame(panel: PanelContainer, color: Color = BG_DARKE
 
 ## 为 PanelContainer 添加四角像素方块装饰
 static func add_corner_decorations(panel: PanelContainer, color: Color = ACCENT_BLUE) -> void:
-	var corners := [
-		Vector2(0, 0),                                    # 左上
-		Vector2(panel.size.x - CORNER_SIZE, 0),            # 右上
-		Vector2(0, panel.size.y - CORNER_SIZE),            # 左下
-		Vector2(panel.size.x - CORNER_SIZE, panel.size.y - CORNER_SIZE),  # 右下
+	var presets := [
+		Control.PRESET_TOP_LEFT,
+		Control.PRESET_TOP_RIGHT,
+		Control.PRESET_BOTTOM_LEFT,
+		Control.PRESET_BOTTOM_RIGHT,
 	]
-	for pos in corners:
+	for preset in presets:
 		var corner := ColorRect.new()
 		corner.color = color
 		corner.custom_minimum_size = Vector2(CORNER_SIZE, CORNER_SIZE)
-		corner.size = Vector2(CORNER_SIZE, CORNER_SIZE)
-		corner.position = pos
+		corner.set_anchors_and_offsets_preset(preset, Control.PRESET_MODE_MINSIZE)
 		corner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		corner.z_index = 10
 		panel.add_child(corner)
 
 

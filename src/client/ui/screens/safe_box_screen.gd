@@ -11,6 +11,7 @@ signal item_moved(from_idx: int, to_idx: int)
 signal item_taken_out(item: PlayerTypes.SafeBoxItem, index: int)
 ## 物品丢弃（不可恢复）
 signal item_discarded(item: PlayerTypes.SafeBoxItem, index: int)
+signal back_requested()
 
 # ─── 布局常量（整数, 像素单位） ──────────────────────────────────────────────
 const COLS := 2                    ## 固定 2 列
@@ -102,7 +103,7 @@ func _build_ui() -> void:
 	# 返回按钮
 	_btn_close = _create_pixel_button("返回", PixelTheme.TEXT_DIM)
 	_btn_close.position = Vector2(SCREEN_W / 2 - 80, SCREEN_H - 100)
-	_btn_close.pressed.connect(func() -> void: visible = false)
+	_btn_close.pressed.connect(func() -> void: back_requested.emit())
 	add_child(_btn_close)
 
 

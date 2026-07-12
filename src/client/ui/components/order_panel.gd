@@ -18,47 +18,61 @@ func _ready() -> void:
 
 
 func _build_ui() -> void:
-	var hbox := HBoxContainer.new()
-	add_child(hbox)
+	add_theme_stylebox_override("panel", PixelTheme.create_rpg_panel())
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 4)
+	add_child(column)
+	var inputs := HBoxContainer.new()
+	inputs.add_theme_constant_override("separation", 4)
+	column.add_child(inputs)
 
 	_qty_spinbox = SpinBox.new()
 	_qty_spinbox.min_value = 1
 	_qty_spinbox.max_value = 10000
 	_qty_spinbox.value = 10
-	_qty_spinbox.custom_minimum_size = Vector2(100, 30)
-	hbox.add_child(_qty_spinbox)
+	_qty_spinbox.custom_minimum_size = Vector2(78, 32)
+	_qty_spinbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inputs.add_child(_qty_spinbox)
 
 	_limit_check = CheckBox.new()
 	_limit_check.text = "限价"
-	hbox.add_child(_limit_check)
+	inputs.add_child(_limit_check)
 
 	_price_spinbox = SpinBox.new()
 	_price_spinbox.min_value = 0.01
 	_price_spinbox.max_value = 9999.0
 	_price_spinbox.value = 100.0
-	_price_spinbox.custom_minimum_size = Vector2(100, 30)
-	hbox.add_child(_price_spinbox)
+	_price_spinbox.custom_minimum_size = Vector2(86, 32)
+	_price_spinbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inputs.add_child(_price_spinbox)
+
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 4)
+	column.add_child(actions)
 
 	_buy_btn = Button.new()
 	_buy_btn.text = "买入"
-	_buy_btn.custom_minimum_size = Vector2(80, 30)
+	_buy_btn.custom_minimum_size = Vector2(0, 40)
+	_buy_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_buy_btn.pressed.connect(func() -> void:
 		_emit_order(GameEnums.OrderSide.BUY))
-	hbox.add_child(_buy_btn)
+	actions.add_child(_buy_btn)
 
 	_sell_btn = Button.new()
 	_sell_btn.text = "卖出"
-	_sell_btn.custom_minimum_size = Vector2(80, 30)
+	_sell_btn.custom_minimum_size = Vector2(0, 40)
+	_sell_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_sell_btn.pressed.connect(func() -> void:
 		_emit_order(GameEnums.OrderSide.SELL))
-	hbox.add_child(_sell_btn)
+	actions.add_child(_sell_btn)
 
 	_short_btn = Button.new()
 	_short_btn.text = "做空"
-	_short_btn.custom_minimum_size = Vector2(80, 30)
+	_short_btn.custom_minimum_size = Vector2(0, 40)
+	_short_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_short_btn.pressed.connect(func() -> void:
 		_emit_order(GameEnums.OrderSide.SHORT))
-	hbox.add_child(_short_btn)
+	actions.add_child(_short_btn)
 
 
 func _emit_order(side: int) -> void:

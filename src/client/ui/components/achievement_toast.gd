@@ -42,18 +42,7 @@ func _show_next_toast() -> void:
 
 	# 创建 Toast 面板
 	_current_toast = PanelContainer.new()
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.15, 0.15, 0.22, 0.95)
-	style.border_color = Color(1.0, 0.85, 0.2, 0.8)
-	style.border_width_left = 3
-	style.border_width_right = 3
-	style.border_width_top = 3
-	style.border_width_bottom = 3
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
-	_current_toast.add_theme_stylebox_override("panel", style)
+	_current_toast.add_theme_stylebox_override("panel", PixelTheme.create_highlight_panel())
 
 	# 内容布局
 	var vbox := VBoxContainer.new()
@@ -65,9 +54,9 @@ func _show_next_toast() -> void:
 	header.add_theme_constant_override("separation", 8)
 	vbox.add_child(header)
 
-	var icon := Label.new()
-	icon.text = "🏆"
-	icon.add_theme_font_size_override("font_size", 24)
+	var icon := PixelIcon.new()
+	icon.icon_type = PixelIcon.Icon.TROPHY
+	icon.pixel_size = 2
 	header.add_child(icon)
 
 	var title_label := Label.new()

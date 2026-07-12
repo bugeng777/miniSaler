@@ -5,6 +5,7 @@ extends Node
 class_name AchievementSystem
 
 signal achievement_unlocked(player_id: int, achievement_id: StringName)
+signal reward_granted(player_id: int, reward_type: String, reward_value: String)
 
 
 ## 成就定义
@@ -36,12 +37,12 @@ func _register_achievements() -> void:
 	_register(&"iron_man", "钢铁意志", "爆仓 10 次仍未放弃", "skill", "iron_will")
 	_register(&"streak_10", "十连胜", "连续 10 次撤离成功", "funds", "20000")
 	_register(&"era_tokyo", "泡沫猎手", "在东京 1989 成功撤离 3 次", "skill", "risk_warning")
-	_register(&"era_shanghai", "六千点勇士", "在上海 2007 成功撤离 3 次", "skill", "dispersion")
+	_register(&"era_shanghai", "六千点勇士", "在上海 2007 成功撤离 3 次", "skill", "diversify")
 	_register(&"trades_100", "百次操盘", "累计交易 100 次", "funds", "5000")
 	_register(&"trades_500", "交易狂人", "累计交易 500 次", "funds", "15000")
 	_register(&"profit_500k", "半百万富翁", "累计利润达到 50 万", "funds", "25000")
 	_register(&"big_loss", "惨痛教训", "单局亏损超过 5 万", "funds", "3000")
-	_register(&"level_10", "初露锋芒", "玩家等级达到 10", "skill", "cash_king")
+	_register(&"level_10", "初露锋芒", "玩家等级达到 10", "skill", "cash_is_king")
 	_register(&"level_20", "资深交易员", "玩家等级达到 20", "safe_box_upgrade", "1")
 	_register(&"games_50", "老玩家", "累计 50 局", "funds", "10000")
 
@@ -68,7 +69,7 @@ func check_achievements(player_id: int, profile: PlayerTypes.PlayerProfile,
 
 	# 百万富翁
 	if not profile.achievements.has(&"millionaire"):
-		if profile.total_profit + session_result.get("profit", 0.0) >= 1_000_000:
+		if profile.total_profit >= 1_000_000:
 			newly_unlocked.append(&"millionaire")
 
 	# 黑天鹅幸存者
@@ -166,6 +167,27 @@ func check_achievements(player_id: int, profile: PlayerTypes.PlayerProfile,
 		achievement_unlocked.emit(player_id, ach_id)
 
 	return newly_unlocked
+
+
+## 发放成就奖励。调用方在把成就写入 profile 前执行，保证存档原子落盘。
+func grant_reward(player_id: int, profile: PlayerTypes.PlayerProfile,
+		achievement_id: StringName) -> bool:
+	var definition := get_definition(achievement_id)
+	if definition == null:
+		return false
+	match definition.reward_type:
+		"skill":
+			var skill_id := StringName(definition.reward_value)
+			if not profile.unlocked_skills.has(skill_id):
+				profile.unlocked_skills.append(skill_id)
+		"safe_box_upgrade":
+			profile.safe_box_slots += maxi(int(definition.reward_value), 0)
+		"funds":
+			profile.total_funds += maxf(float(definition.reward_value), 0.0)
+		_:
+			return false
+	reward_granted.emit(player_id, definition.reward_type, definition.reward_value)
+	return true
 
 
 ## 获取成就定义

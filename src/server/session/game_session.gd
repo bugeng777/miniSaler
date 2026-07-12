@@ -24,6 +24,8 @@ var safe_box_manager: SafeBoxManager = null
 var rank_system: RankSystem = null
 var achievement_system: AchievementSystem = null
 var save_manager: SaveManager = null
+var matchmaking: Matchmaking = null
+var leaderboard_manager: LeaderboardManager = null
 
 ## ─── 状态 ────────────────────────────────────────────────────────────────────
 var _current_phase: int = GameEnums.GamePhase.ERA_SELECT
@@ -175,8 +177,20 @@ func host_start_game() -> void:
 ## Host 提交订单
 func host_submit_order(player_id: int, symbol: StringName, side: int,
 		order_type: int, quantity: int, limit_price: float = 0.0) -> void:
-	if market_engine:
-		market_engine.submit_order(player_id, symbol, side, order_type, quantity, limit_price)
+	if not market_engine or not player_manager:
+		return
+	# 先在经济层做权威校验并登记订单，再把同一个 ID 交给撮合层。
+	# 市价单会同步成交，因此顺序不能颠倒。
+	var player_order := player_manager.submit_order(
+		player_id, symbol, side, order_type, quantity, limit_price)
+	if player_order == null or player_order.status == GameEnums.OrderStatus.REJECTED:
+		return
+	var market_order_id := market_engine.submit_order(
+		player_id, symbol, side, order_type, quantity, limit_price,
+		player_order.order_id)
+	if market_order_id != player_order.order_id:
+		player_manager.reject_pending_order(
+			player_id, player_order.order_id, "Order rejected by market")
 	# 订单成交后通过 market_engine.tick_complete → _on_market_tick 广播更新
 
 
@@ -206,6 +220,8 @@ func _on_trading_tick() -> void:
 	# 更新技能冷却
 	if skill_system:
 		skill_system.update_cooldowns(1.0)
+	if player_manager:
+		player_manager.apply_tick_modifiers(1.0)
 	# 更新 Bot
 	if bot_manager and market_engine:
 		var prices := market_engine.get_current_snapshot()
@@ -231,6 +247,8 @@ func connect_subsystem_signals() -> void:
 		# MD-04: 改用 MarketEngine passthrough 信号
 		if market_engine.has_signal("order_filled_passthrough") and player_manager:
 			market_engine.connect("order_filled_passthrough", _on_order_filled_passthrough)
+		if market_engine.has_signal("order_partially_filled_passthrough") and player_manager:
+			market_engine.connect("order_partially_filled_passthrough", _on_order_filled_passthrough)
 	if extraction_engine:
 		extraction_engine.extraction_window_opened.connect(_on_extraction_window_opened)
 		extraction_engine.extraction_window_closed.connect(_on_extraction_window_closed)
@@ -251,6 +269,10 @@ func connect_subsystem_signals() -> void:
 			bot_manager.connect("boss_defeated", _on_boss_defeated)
 	if player_manager:
 		player_manager.player_bust_detected.connect(_on_bust_detected)
+	if matchmaking:
+		matchmaking.match_found.connect(_on_match_found)
+	if leaderboard_manager:
+		leaderboard_manager.leaderboard_updated.connect(_on_leaderboard_updated)
 
 
 ## ─── 子系统事件处理（广播到 UI）───────────────────────────────────────────
@@ -302,15 +324,28 @@ func _on_extraction_window_closed() -> void:
 
 
 func _on_player_extracted(player_id: int, profit: float) -> void:
-	# 撤离成功后直接进入结算
-	goto_settlement()
+	if _all_human_players_resolved():
+		goto_settlement()
 
 
 func _on_player_busted(player_id: int) -> void:
 	if player_manager:
 		player_manager.force_liquidate(player_id)
-	# 爆仓后进入结算
-	goto_settlement()
+	if _all_human_players_resolved():
+		goto_settlement()
+
+
+func _all_human_players_resolved() -> bool:
+	if not player_manager or not extraction_engine:
+		return true
+	var found_human := false
+	for snapshot in player_manager.get_all_snapshots():
+		var state := player_manager.get_player_state(snapshot.player_id)
+		if state and not state.is_bot:
+			found_human = true
+			if extraction_engine.get_result(snapshot.player_id) == GameEnums.ExtractionResult.NONE:
+				return false
+	return found_human
 
 
 func _on_news_generated(event: Dictionary) -> void:
@@ -360,6 +395,22 @@ func _on_boss_defeated(boss_name: String, result: Dictionary) -> void:
 
 ## 技能效果广播（WS2 skill_effect_applied 信号）
 func _on_skill_effect_applied(player_id: int, skill_id: StringName, effect: Dictionary) -> void:
+	var effect_type := StringName(effect.get("effect_type", ""))
+	var target := StringName(effect.get("target", ""))
+	var value: float = effect.get("value", 0.0)
+	var duration: float = effect.get("duration", 0.0)
+	match effect_type:
+		&"fund_modifier":
+			if player_manager:
+				player_manager.apply_fund_modifier(
+					player_id, skill_id, target, value, duration)
+		&"order_modifier":
+			if player_manager:
+				player_manager.apply_order_modifier(
+					player_id, skill_id, target, value, duration)
+		&"extraction":
+			if extraction_engine:
+				extraction_engine.register_window_extension(player_id, value)
 	_broadcast(NetworkProtocol.build_skill_effect_msg(player_id, skill_id, effect))
 
 
@@ -370,12 +421,10 @@ func _on_bust_detected(player_id: int) -> void:
 
 ## Bot 行为转发：Bot 下单 → MarketEngine
 func _on_bot_action(bot_id: int, action: Dictionary) -> void:
-	if market_engine:
-		var symbol := StringName(action.get("symbol", ""))
-		var side: int = action.get("side", GameEnums.OrderSide.BUY)
-		var quantity: int = action.get("quantity", 10)
-		market_engine.submit_order(bot_id, symbol, side,
-			GameEnums.OrderType.MARKET, quantity)
+	var symbol := StringName(action.get("symbol", ""))
+	var side: int = action.get("side", GameEnums.OrderSide.BUY)
+	var quantity: int = action.get("quantity", 10)
+	host_submit_order(bot_id, symbol, side, GameEnums.OrderType.MARKET, quantity)
 
 
 ## ─── RPC 接收客户端请求（多人模式）──────────────────────────────────────────
@@ -430,6 +479,8 @@ func rpc_configure_loadout(data: Dictionary) -> void:
 		var safe_cash := safe_box_manager.get_total_cash(pid) if safe_box_manager else 0.0
 		player_manager.register_player(pid, "Player_%d" % pid, safe_cash + extra_funds)
 	if skill_system:
+		if extraction_engine:
+			extraction_engine.clear_window_extension(pid)
 		var typed_ids: Array[StringName] = []
 		for s in skill_ids:
 			typed_ids.append(StringName(s))
@@ -466,6 +517,28 @@ func rpc_quick_chat(message_id: int) -> void:
 	var text: String = QUICK_CHAT_MESSAGES.get(message_id, "")
 	if text != "":
 		_broadcast(NetworkProtocol.build_chat_msg(pid, text))
+
+
+@rpc("any_peer", "call_local")
+func rpc_request_match(rank_tier: int) -> void:
+	var pid := multiplayer.get_remote_sender_id()
+	if not _validate_peer(pid):
+		return
+	if matchmaking:
+		matchmaking.request_match(pid, rank_tier)
+
+
+func _on_match_found(room_id: String, players: Array) -> void:
+	_broadcast(NetworkProtocol.build_match_found_msg(room_id, players))
+
+
+func _on_leaderboard_updated() -> void:
+	if not leaderboard_manager:
+		return
+	var entries: Array = []
+	for entry in leaderboard_manager.get_global_ranking("rank_points"):
+		entries.append(entry.to_dict())
+	_broadcast(NetworkProtocol.build_leaderboard_msg(entries))
 
 
 @rpc("any_peer", "call_local")
@@ -559,7 +632,7 @@ func _build_settlement_data() -> Dictionary:
 			d["extraction_result"] = result
 			snapshots.append(d)
 			# 找到玩家（非 Bot）的数据
-			if snap.player_id == 1 or not snap.player_id >= 100:
+			if snap.player_id == 1:
 				player_extracted = (result == GameEnums.ExtractionResult.SUCCESS)
 				player_profit = snap.session_profit
 				player_rank_points = snap.rank_points

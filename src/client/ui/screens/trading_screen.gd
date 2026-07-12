@@ -5,7 +5,7 @@ extends Control
 class_name TradingScreen
 
 var _top_bar: TopBar = null
-var _stock_list: VBoxContainer = null
+var _stock_list: HBoxContainer = null
 var _kline_chart: KLineChart = null
 var _order_panel: OrderPanel = null
 var _extraction_panel: ExtractionPanel = null
@@ -21,56 +21,77 @@ func _ready() -> void:
 
 
 func _build_ui() -> void:
+	var background := ColorRect.new()
+	background.color = PixelTheme.BG_DARKEST
+	background.set_anchors_preset(Control.PRESET_FULL_RECT)
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(background)
 	# 顶栏
+	var top_panel := PanelContainer.new()
+	top_panel.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	top_panel.custom_minimum_size = Vector2(0, 48)
+	top_panel.add_theme_stylebox_override("panel", PixelTheme.create_simple_panel())
+	add_child(top_panel)
 	_top_bar = TopBar.new()
-	_top_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_top_bar.custom_minimum_size = Vector2(0, 50)
-	add_child(_top_bar)
+	_top_bar.custom_minimum_size = Vector2(0, 48)
+	top_panel.add_child(_top_bar)
 
-	# 三栏布局
-	var hbox := HBoxContainer.new()
-	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	hbox.position.y = 50
-	hbox.size.y -= 80  # 底部留空间给新闻栏
-	add_child(hbox)
+	# 390×844 竖屏单列布局：图表 → 股票横条 → 交易 → 技能 → 持仓/排行。
+	var main_column := VBoxContainer.new()
+	main_column.set_anchors_preset(Control.PRESET_FULL_RECT)
+	main_column.offset_top = 50.0
+	main_column.offset_bottom = -34.0
+	main_column.add_theme_constant_override("separation", 3)
+	add_child(main_column)
 
-	# 左栏：股票列表
-	var left_panel := PanelContainer.new()
-	left_panel.custom_minimum_size = Vector2(150, 0)
-	left_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left_panel.size_flags_stretch_ratio = 0.15
-	hbox.add_child(left_panel)
-	_stock_list = VBoxContainer.new()
-	left_panel.add_child(_stock_list)
-
-	# 中栏：K线 + 交易面板
-	var center_panel := VBoxContainer.new()
-	center_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	center_panel.size_flags_stretch_ratio = 0.55
-	hbox.add_child(center_panel)
+	var chart_panel := PanelContainer.new()
+	chart_panel.add_theme_stylebox_override("panel", PixelTheme.create_simple_panel())
+	chart_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	chart_panel.size_flags_stretch_ratio = 2.5
+	main_column.add_child(chart_panel)
 	_kline_chart = KLineChart.new()
 	_kline_chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_kline_chart.custom_minimum_size = Vector2(0, 300)
-	center_panel.add_child(_kline_chart)
-	_order_panel = OrderPanel.new()
-	_order_panel.custom_minimum_size = Vector2(0, 150)
-	center_panel.add_child(_order_panel)
-	_skill_bar = SkillBar.new()
-	_skill_bar.custom_minimum_size = Vector2(0, 40)
-	center_panel.add_child(_skill_bar)
+	_kline_chart.custom_minimum_size = Vector2(0, 200)
+	chart_panel.add_child(_kline_chart)
 
-	# 右栏：持仓 + 排行
-	var right_panel := VBoxContainer.new()
-	right_panel.custom_minimum_size = Vector2(180, 0)
-	right_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_panel.size_flags_stretch_ratio = 0.3
-	hbox.add_child(right_panel)
+	var stock_panel := PanelContainer.new()
+	stock_panel.add_theme_stylebox_override("panel", PixelTheme.create_simple_panel())
+	stock_panel.custom_minimum_size = Vector2(0, 58)
+	main_column.add_child(stock_panel)
+	var stock_scroll := ScrollContainer.new()
+	stock_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	stock_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	stock_panel.add_child(stock_scroll)
+	_stock_list = HBoxContainer.new()
+	_stock_list.add_theme_constant_override("separation", 3)
+	stock_scroll.add_child(_stock_list)
+
+	_order_panel = OrderPanel.new()
+	_order_panel.custom_minimum_size = Vector2(0, 120)
+	main_column.add_child(_order_panel)
+	_skill_bar = SkillBar.new()
+	_skill_bar.custom_minimum_size = Vector2(0, 36)
+	main_column.add_child(_skill_bar)
+
+	var bottom_row := HBoxContainer.new()
+	bottom_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bottom_row.size_flags_stretch_ratio = 1.2
+	bottom_row.add_theme_constant_override("separation", 3)
+	main_column.add_child(bottom_row)
+	var portfolio_panel := PanelContainer.new()
+	portfolio_panel.add_theme_stylebox_override("panel", PixelTheme.create_simple_panel())
+	portfolio_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_row.add_child(portfolio_panel)
 	_portfolio_view = PortfolioView.new()
 	_portfolio_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	right_panel.add_child(_portfolio_view)
+	portfolio_panel.add_child(_portfolio_view)
+	var leaderboard_panel := PanelContainer.new()
+	leaderboard_panel.add_theme_stylebox_override("panel", PixelTheme.create_simple_panel())
+	leaderboard_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_row.add_child(leaderboard_panel)
 	_leaderboard_view = LeaderboardView.new()
 	_leaderboard_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	right_panel.add_child(_leaderboard_view)
+	leaderboard_panel.add_child(_leaderboard_view)
 
 	# 底部新闻栏
 	_news_ticker = NewsTicker.new()
@@ -81,7 +102,11 @@ func _build_ui() -> void:
 
 	# 撤离面板（浮动）
 	_extraction_panel = ExtractionPanel.new()
-	_extraction_panel.position = Vector2(500, 500)
+	_extraction_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_extraction_panel.offset_left = -140
+	_extraction_panel.offset_right = 140
+	_extraction_panel.offset_top = -190
+	_extraction_panel.offset_bottom = -42
 	_extraction_panel.visible = false
 	add_child(_extraction_panel)
 
@@ -99,7 +124,7 @@ func update_market_tick(data: Dictionary) -> void:
 	if _selected_symbol != &"":
 		for snap in snapshots:
 			if snap is Dictionary and snap.get("symbol", "") == str(_selected_symbol):
-				_kline_chart.add_price_point(snap.get("close", 0.0))
+				_kline_chart.add_candle(snap)
 				break
 
 
@@ -117,7 +142,7 @@ func _update_stock_list(snapshots: Array) -> void:
 			var sym: String = snap.get("symbol", "")
 			var price: float = snap.get("close", 0.0)
 			btn.text = "%s\n$%.2f" % [sym, price]
-			btn.custom_minimum_size = Vector2(140, 50)
+			btn.custom_minimum_size = Vector2(76, 44)
 			var sn := StringName(sym)
 			btn.pressed.connect(func() -> void:
 				_selected_symbol = sn

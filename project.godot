@@ -22,10 +22,9 @@ Constants="*res://src/shared/constants.gd"
 
 [display]
 
-window/size/viewport_width=720
-window/size/viewport_height=1280
+window/size/viewport_width=390
+window/size/viewport_height=844
 window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
 
 [editor_plugins]
 
@@ -37,8 +36,8 @@ enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
 
 [rendering]
 
+textures/canvas_textures/default_texture_filter=0
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
-textures/canvas_textures/default_texture_filter=0
 2d/snap/snap_2d_transforms_to_pixel=true
 2d/snap/snap_2d_vertices_to_pixel=true

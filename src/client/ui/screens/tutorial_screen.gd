@@ -1,170 +1,62 @@
-## 新手引导屏幕
-## 所有权: WS5 (客户端 UI 组)
-## 首次进入触发（total_games == 0），分步高亮引导，可跳过
+## 390×844 像素新手教程：卡片式步骤，不依赖桌面绝对坐标高亮框。
 extends Control
 class_name TutorialScreen
 
 signal tutorial_completed()
 signal tutorial_skipped()
 
-## 引导步骤定义
-enum Step {
-	SELECT_STOCK,    ## 选股
-	BUY_STOCK,       ## 买入
-	WATCH_NEWS,      ## 看新闻
-	EXTRACT,         ## 撤离
-	COMPLETE,        ## 完成
+enum Step { SELECT_STOCK, BUY_STOCK, WATCH_NEWS, EXTRACT, COMPLETE }
+
+const STEP_COUNT := 4
+const STEP_DATA: Dictionary = {
+	Step.SELECT_STOCK: {"title": "第一步：选择股票", "body": "在股票横条中选择目标。\n每只股票显示实时报价，选择后 K 线会立即切换。", "art": "[MNTK] [BIOZ] [GOLX]\n   ▴ SELECT"},
+	Step.BUY_STOCK: {"title": "第二步：提交订单", "body": "输入数量后选择买入、卖出或做空。\n市价单立即成交，限价单会进入订单簿等待。", "art": "QTY  010\n[ BUY ] [ SELL ]"},
+	Step.WATCH_NEWS: {"title": "第三步：阅读新闻", "body": "底部新闻终端会逐字推送市场消息。\n结合 K 线与情绪指数判断风险，不要只追涨。", "art": "NEWS > RATE CUT..._\nFGI  ██████░░░░"},
+	Step.EXTRACT: {"title": "第四步：抓住撤离窗口", "body": "窗口开放时立即决定是否落袋为安。\n成功撤离才能永久带走利润；错过窗口可能爆仓。", "art": "!! EXTRACTION OPEN !!\n[  EXIT MARKET  ]"},
 }
 
 var _current_step: int = Step.SELECT_STOCK
-var _overlay: ColorRect = null          ## 半透明遮罩
-var _highlight_rect: ColorRect = null   ## 高亮框
-var _text_label: Label = null           ## 步骤说明文字
-var _next_btn: Button = null            ## 下一步按钮
-var _skip_btn: Button = null            ## 跳过按钮
-var _step_indicator: Label = null       ## 步骤指示器
-
-## 每个步骤的引导文本
-const STEP_TEXTS: Dictionary = {
-	Step.SELECT_STOCK: "第一步：选择股票\n\n在左侧股票列表中，点击你想交易的股票。\n每只股票显示当前价格，选中后 K 线图会切换到该股票。",
-	Step.BUY_STOCK: "第二步：买入股票\n\n在交易面板中输入数量，点击【买入】按钮。\n你可以使用快捷按钮快速选择数量，或设置限价单。",
-	Step.WATCH_NEWS: "第三步：关注新闻\n\n底部新闻栏会实时推送市场消息。\n利好消息推动股价上涨，利空消息导致下跌。\n根据新闻判断买卖时机！",
-	Step.EXTRACT: "第四步：撤离提现\n\n当撤离窗口开放时，点击【撤离】按钮。\n所有持仓会以当前市价平仓，利润永久入账。\n注意：窗口不是随时开放的，要抓住时机！",
-}
-
-const STEP_COUNT: int = 4
-
+var _step_indicator: Label = null
+var _title_label: Label = null
+var _art_label: Label = null
+var _text_label: Label = null
+var _next_btn: Button = null
 
 func _ready() -> void:
 	_build_ui()
 	_show_step(Step.SELECT_STOCK)
 
-
 func _build_ui() -> void:
-	# 半透明遮罩（覆盖全屏）
-	_overlay = ColorRect.new()
-	_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_overlay.color = Color(0.0, 0.0, 0.0, 0.7)
-	add_child(_overlay)
+	var background := ColorRect.new(); background.color = PixelTheme.BG_DARKEST; background.set_anchors_preset(Control.PRESET_FULL_RECT); add_child(background)
+	var column := VBoxContainer.new(); column.set_anchors_preset(Control.PRESET_FULL_RECT)
+	column.offset_left = 18; column.offset_top = 28; column.offset_right = -18; column.offset_bottom = -28
+	column.add_theme_constant_override("separation", 12); add_child(column)
+	var heading := Label.new(); heading.text = "══ 新手交易终端 ══"; heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", 22); heading.add_theme_color_override("font_color", PixelTheme.ACCENT_GOLD); column.add_child(heading)
+	_step_indicator = Label.new(); _step_indicator.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _step_indicator.add_theme_color_override("font_color", PixelTheme.TEXT_SECONDARY); column.add_child(_step_indicator)
+	var card := PanelContainer.new(); card.add_theme_stylebox_override("panel", PixelTheme.create_rpg_panel()); card.size_flags_vertical = Control.SIZE_EXPAND_FILL; column.add_child(card)
+	var card_content := VBoxContainer.new(); card_content.alignment = BoxContainer.ALIGNMENT_CENTER; card_content.add_theme_constant_override("separation", 20); card.add_child(card_content)
+	_title_label = Label.new(); _title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _title_label.add_theme_font_size_override("font_size", 21); _title_label.add_theme_color_override("font_color", PixelTheme.ACCENT_GOLD); card_content.add_child(_title_label)
+	var preview := PanelContainer.new(); preview.add_theme_stylebox_override("panel", PixelTheme.create_simple_panel()); preview.custom_minimum_size = Vector2(300, 190); card_content.add_child(preview)
+	_art_label = Label.new(); _art_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _art_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER; _art_label.add_theme_font_size_override("font_size", 18); _art_label.add_theme_color_override("font_color", PixelTheme.COLOR_UP); preview.add_child(_art_label)
+	_text_label = Label.new(); _text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; _text_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _text_label.custom_minimum_size = Vector2(300, 120); _text_label.add_theme_font_size_override("font_size", 16); card_content.add_child(_text_label)
+	var buttons := HBoxContainer.new(); buttons.alignment = BoxContainer.ALIGNMENT_CENTER; buttons.add_theme_constant_override("separation", 10); column.add_child(buttons)
+	var skip := Button.new(); skip.text = "跳过"; skip.custom_minimum_size = Vector2(110, 44); skip.pressed.connect(_on_skip); buttons.add_child(skip)
+	_next_btn = Button.new(); _next_btn.text = "下一步 ▸"; _next_btn.custom_minimum_size = Vector2(160, 44); _next_btn.pressed.connect(_on_next); buttons.add_child(_next_btn)
 
-	# 高亮框（模拟目标区域高亮）
-	_highlight_rect = ColorRect.new()
-	_highlight_rect.color = Color(0.0, 0.7, 0.5, 0.15)
-	_highlight_rect.custom_minimum_size = Vector2(200, 100)
-	_highlight_rect.position = Vector2(100, 200)
-	add_child(_highlight_rect)
-
-	# 高亮框边框
-	var border := ReferenceRect.new()
-	border.set_anchors_preset(Control.PRESET_FULL_RECT)
-	border.border_color = Color(0.0, 0.9, 0.5)
-	border.border_width = 2.0
-	border.editor_only = false
-	_highlight_rect.add_child(border)
-
-	# 引导内容面板
-	var content_panel := VBoxContainer.new()
-	content_panel.position = Vector2(200, 400)
-	content_panel.custom_minimum_size = Vector2(450, 250)
-	add_child(content_panel)
-
-	# 步骤指示器
-	_step_indicator = Label.new()
-	_step_indicator.add_theme_font_size_override("font_size", 14)
-	_step_indicator.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	content_panel.add_child(_step_indicator)
-
-	# 引导说明文字
-	_text_label = Label.new()
-	_text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_text_label.custom_minimum_size = Vector2(430, 120)
-	_text_label.add_theme_font_size_override("font_size", 18)
-	_text_label.add_theme_color_override("font_color", Color(0.95, 0.95, 0.95))
-	content_panel.add_child(_text_label)
-
-	# 按钮行
-	var btn_row := HBoxContainer.new()
-	btn_row.alignment = BoxContainer.ALIGNMENT_END
-	content_panel.add_child(btn_row)
-
-	# 跳过按钮
-	_skip_btn = Button.new()
-	_skip_btn.text = "跳过引导"
-	_skip_btn.custom_minimum_size = Vector2(100, 40)
-	_skip_btn.pressed.connect(_on_skip)
-	btn_row.add_child(_skip_btn)
-
-	# 下一步按钮
-	_next_btn = Button.new()
-	_next_btn.text = "下一步"
-	_next_btn.custom_minimum_size = Vector2(120, 40)
-	_next_btn.pressed.connect(_on_next)
-	btn_row.add_child(_next_btn)
-
-
-## 显示指定步骤
 func _show_step(step: int) -> void:
 	_current_step = step
 	if step >= Step.COMPLETE:
-		_finish()
-		return
+		_finish(); return
+	var data: Dictionary = STEP_DATA.get(step, {})
+	_step_indicator.text = "STEP %02d / %02d   %s" % [step + 1, STEP_COUNT, "■".repeat(step + 1) + "□".repeat(STEP_COUNT - step - 1)]
+	_title_label.text = data.get("title", "")
+	_art_label.text = data.get("art", "")
+	_text_label.text = data.get("body", "")
+	_next_btn.text = "完成 ▸" if step == STEP_COUNT - 1 else "下一步 ▸"
 
-	# 更新步骤指示器
-	_step_indicator.text = "步骤 %d / %d" % [step + 1, STEP_COUNT]
-
-	# 更新说明文字
-	_text_label.text = STEP_TEXTS.get(step, "")
-
-	# 移动高亮框到目标区域
-	match step:
-		Step.SELECT_STOCK:
-			_highlight_rect.position = Vector2(10, 80)
-			_highlight_rect.size = Vector2(160, 400)
-		Step.BUY_STOCK:
-			_highlight_rect.position = Vector2(180, 420)
-			_highlight_rect.size = Vector2(400, 120)
-		Step.WATCH_NEWS:
-			_highlight_rect.position = Vector2(0, 560)
-			_highlight_rect.size = Vector2(800, 40)
-		Step.EXTRACT:
-			_highlight_rect.position = Vector2(500, 480)
-			_highlight_rect.size = Vector2(170, 80)
-
-	# 最后一步显示"完成"
-	if step == STEP_COUNT - 1:
-		_next_btn.text = "完成"
-	else:
-		_next_btn.text = "下一步"
-
-
-## 下一步
-func _on_next() -> void:
-	_show_step(_current_step + 1)
-
-
-## 跳过
-func _on_skip() -> void:
-	tutorial_skipped.emit()
-	_hide()
-
-
-## 完成
-func _finish() -> void:
-	tutorial_completed.emit()
-	_hide()
-
-
-## 隐藏引导
-func _hide() -> void:
-	visible = false
-
-
-## 重新显示（从设置中重新触发）
-func restart() -> void:
-	_show_step(Step.SELECT_STOCK)
-	visible = true
-
-
-## 判断是否应该显示新手引导
-static func should_show(total_games: int) -> bool:
-	return total_games == 0
+func _on_next() -> void: _show_step(_current_step + 1)
+func _on_skip() -> void: tutorial_skipped.emit(); visible = false
+func _finish() -> void: tutorial_completed.emit(); visible = false
+func restart() -> void: visible = true; _show_step(Step.SELECT_STOCK)
+static func should_show(total_games: int) -> bool: return total_games == 0

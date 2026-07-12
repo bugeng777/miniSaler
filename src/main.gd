@@ -34,6 +34,7 @@ var _ui_manager: UIManager = null
 var _sfx_manager: SfxManager = null
 ## Phase 3 VFX 图层
 var _vfx_layer: VfxLayer = null
+var _achievement_toast: AchievementToast = null
 
 ## 玩家档案（跨局持久化）
 var _player_profile: PlayerTypes.PlayerProfile = null
@@ -89,7 +90,7 @@ func _start_host_mode() -> void:
 	_loadout_timer.timeout.connect(_on_loadout_countdown_tick)
 	add_child(_loadout_timer)
 
-	DarkTheme.apply(get_tree())
+	PixelTheme.apply_pixel_theme(get_tree())
 	print("Main: Host mode started — 直接进入本地游戏")
 
 
@@ -165,35 +166,40 @@ func _inject_subsystems() -> void:
 	_game_session.rank_system = _rank_system
 	_game_session.achievement_system = _achievement_system
 	_game_session.save_manager = _save_manager
+	_game_session.matchmaking = _matchmaking
+	_game_session.leaderboard_manager = _leaderboard_manager
 
 
 ## 构建游戏 UI（代码动态创建）
 func _build_game_ui() -> void:
 	_ui_manager = UIManager.new()
 	_ui_manager.name = "UIManager"
-	_ui_manager.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_ui_manager)
+	_ui_manager.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	_ui_manager.register_screen("era_select", EraSelectScreen.new())
+	_ui_manager.register_screen("main_menu", MainMenuScreen.new())
 	_ui_manager.register_screen("loadout", LoadoutScreen.new())
 	_ui_manager.register_screen("trading", TradingScreen.new())
 	_ui_manager.register_screen("settlement", SettlementScreen.new())
 	_ui_manager.register_screen("profile", ProfileScreen.new())
 	_ui_manager.register_screen("leaderboard", LeaderboardScreen.new())
 	_ui_manager.register_screen("tutorial", TutorialScreen.new())
-	# TODO(WS5): SafeBoxScreen 尚未交付，待 WS5 提交 safe_box_screen.gd 后启用下行
-	# _ui_manager.register_screen("safe_box", SafeBoxScreen.new())
+	_ui_manager.register_screen("safe_box", SafeBoxScreen.new())
+	_ui_manager.register_screen("skills", SkillsScreen.new())
+	_ui_manager.register_screen("achievements", AchievementsScreen.new())
+	_ui_manager.register_screen("settings", SettingsScreen.new())
 
 	# Phase 3: VFX 图层（覆盖在所有屏幕之上）
 	_vfx_layer = VfxLayer.new()
 	_vfx_layer.name = "VfxLayer"
 	add_child(_vfx_layer)
+	_achievement_toast = AchievementToast.new()
+	_achievement_toast.name = "AchievementToast"
+	add_child(_achievement_toast)
+	_achievement_toast.set_sfx_manager(_sfx_manager)
 
-	# Phase 3: 首次启动（total_games==0）先显示新手引导
-	if _player_profile and _player_profile.total_games == 0:
-		_ui_manager.show_screen("tutorial")
-	else:
-		_ui_manager.show_screen("era_select")
+	_show_main_menu()
 
 
 ## 填充时代选择屏幕数据
@@ -214,11 +220,15 @@ func _connect_ui_signals() -> void:
 	# ── GameSession → UI（Host 模式直接连接）──
 	_game_session.phase_changed.connect(_on_phase_changed)
 	_game_session.data_received.connect(_on_data_received)
+	var main_menu := _find_screen("main_menu")
+	if main_menu is MainMenuScreen:
+		(main_menu as MainMenuScreen).menu_item_selected.connect(_on_menu_item_selected)
 
 	# ── 时代选择屏幕 ──
 	var era_screen := _find_screen("era_select")
 	if era_screen is EraSelectScreen:
 		(era_screen as EraSelectScreen).era_selected.connect(_on_era_selected)
+		(era_screen as EraSelectScreen).back_requested.connect(_show_main_menu)
 
 	# ── 准备屏幕 ──
 	var loadout_screen := _find_screen("loadout")
@@ -279,6 +289,12 @@ func _connect_ui_signals() -> void:
 	# ── Phase 2 补漏: 订单被拒绝（WS3）──
 	if _player_manager and _player_manager.has_signal("order_rejected"):
 		_player_manager.order_rejected.connect(_on_order_rejected)
+	if _achievement_system:
+		_achievement_system.achievement_unlocked.connect(_on_achievement_unlocked)
+	for screen_name in ["skills", "achievements", "settings", "safe_box", "profile", "leaderboard"]:
+		var menu_screen := _find_screen(screen_name)
+		if menu_screen and menu_screen.has_signal("back_requested"):
+			menu_screen.connect("back_requested", _show_main_menu)
 
 
 ## ─── UI 事件处理 ─────────────────────────────────────────────────────────────
@@ -314,6 +330,7 @@ func _on_loadout_confirmed(extra_funds: float, skill_ids: Array[StringName]) -> 
 	var total_funds := safe_cash + extra_funds
 	_player_manager.register_player(HOST_PLAYER_ID, "玩家", total_funds)
 	# 装备技能
+	_extraction_engine.clear_window_extension(HOST_PLAYER_ID)
 	_skill_system.equip_skills(HOST_PLAYER_ID, skill_ids)
 	# 存储技能 ID 供技能栏使用
 	_equipped_skill_ids = skill_ids
@@ -349,6 +366,47 @@ func _on_play_again() -> void:
 		(trading as TradingScreen).reset_screen()
 	_game_session.goto_era_select()
 	_populate_era_screen()
+	_show_main_menu()
+
+
+func _on_menu_item_selected(item: StringName) -> void:
+	match item:
+		&"start", &"continue":
+			if _player_profile and _player_profile.total_games == 0:
+				_ui_manager.show_screen("tutorial")
+			else:
+				_ui_manager.show_screen("era_select")
+		&"safe_box":
+			var safe_box := _find_screen("safe_box")
+			if safe_box is SafeBoxScreen:
+				(safe_box as SafeBoxScreen).load_safe_box(_safe_box_manager, HOST_PLAYER_ID)
+			_ui_manager.show_screen("safe_box")
+		&"skills":
+			var skills_screen := _find_screen("skills")
+			if skills_screen is SkillsScreen:
+				(skills_screen as SkillsScreen).load_profile(_player_profile)
+			_ui_manager.show_screen("skills")
+		&"achievements":
+			var achievements_screen := _find_screen("achievements")
+			if achievements_screen is AchievementsScreen:
+				(achievements_screen as AchievementsScreen).load_data(
+					_player_profile, _achievement_system.get_all_definitions())
+			_ui_manager.show_screen("achievements")
+		&"profile":
+			_update_profile_screen()
+			_ui_manager.show_screen("profile")
+		&"settings":
+			_ui_manager.show_screen("settings")
+
+
+func _show_main_menu() -> void:
+	if not _ui_manager:
+		return
+	var menu := _find_screen("main_menu")
+	if menu is MainMenuScreen:
+		(menu as MainMenuScreen).set_total_funds(
+			_player_profile.total_funds if _player_profile else 0.0)
+	_ui_manager.show_screen("main_menu")
 
 
 ## ─── GameSession 数据分发给 UI ──────────────────────────────────────────────
@@ -511,10 +569,8 @@ func _on_skill_effect_applied(player_id: int, skill_id: StringName, effect: Dict
 		_send_skill_display({"skill_id": skill_id, "type": "ui_display", "value": value, "duration": duration})
 		return
 
-	# ─── fund_modifier / order_modifier: WS3 提供（防御性调用）───
+	# 服务端资金/订单/撤离修改由 GameSession 权威分发；Main 只负责表现层。
 	if effect_type == &"fund_modifier":
-		if _player_manager and _player_manager.has_method("apply_fund_modifier"):
-			_player_manager.apply_fund_modifier(player_id, skill_id, target, value, duration)
 		return
 	if effect_type == &"order_modifier":
 		# 闪电下单类：走 WS1 的优先撮合通道（仅标记，实际下单时 OrderBook 检查 skill 状态）
@@ -522,15 +578,10 @@ func _on_skill_effect_applied(player_id: int, skill_id: StringName, effect: Dict
 			# submit_order_priority 由订单提交时触发，此处仅做激活标记
 			_send_skill_display({"skill_id": skill_id, "type": "order_modifier", "priority_active": true, "duration": duration})
 			return
-		# 其他 order_modifier（批量交易/分散投资）走 WS3
-		if _player_manager and _player_manager.has_method("apply_order_modifier"):
-			_player_manager.apply_order_modifier(player_id, skill_id, target, value, duration)
 		return
 
 	# ─── extraction: WS2 ExtractionEngine ───
 	if effect_type == &"extraction":
-		if _extraction_engine and _extraction_engine.has_method("extend_window"):
-			_extraction_engine.extend_window(value)
 		return
 
 	# ─── social: WS2 BotManager（防御性调用）───
@@ -619,6 +670,15 @@ func _on_order_rejected(player_id: int, reason: String) -> void:
 		_sfx_manager.play_sfx(SfxManager.SfxType.NEWS_ALERT)
 
 
+func _on_achievement_unlocked(player_id: int, achievement_id: StringName) -> void:
+	if player_id != HOST_PLAYER_ID or not _achievement_toast or not _achievement_system:
+		return
+	var definition := _achievement_system.get_definition(achievement_id)
+	if definition:
+		_achievement_toast.show_achievement(
+			definition.display_name, definition.description)
+
+
 ## 辅助：查找已注册屏幕
 func _find_screen(screen_name: String) -> Control:
 	if _ui_manager:
@@ -634,6 +694,30 @@ func _persist_settlement(data: Dictionary) -> void:
 	_player_profile.total_games += 1
 	var extracted: bool = data.get("extracted", false)
 	var profit: float = data.get("profit", 0.0)
+	var player_state := _player_manager.get_player_state(HOST_PLAYER_ID) if _player_manager else null
+	var session_trades := player_state.total_trades if player_state else 0
+	_player_profile.total_trades += session_trades
+	if extracted:
+		_player_profile.current_streak += 1
+		_player_profile.max_streak = maxi(
+			_player_profile.max_streak, _player_profile.current_streak)
+		if _era_manager and _era_manager.get_current_era():
+			var era_key := str(_era_manager.get_current_era().era_id)
+			_player_profile.era_extractions[era_key] = int(
+				_player_profile.era_extractions.get(era_key, 0)) + 1
+	else:
+		_player_profile.current_streak = 0
+		if profit < 0.0:
+			_player_profile.highest_single_loss = maxf(
+				_player_profile.highest_single_loss, absf(profit))
+		var result_for_host := GameEnums.ExtractionResult.NONE
+		for player_data in data.get("players", []):
+			if player_data.get("player_id", 0) == HOST_PLAYER_ID:
+				result_for_host = player_data.get(
+					"extraction_result", GameEnums.ExtractionResult.NONE)
+				break
+		if result_for_host == GameEnums.ExtractionResult.BUSTED:
+			_player_profile.total_busts += 1
 	if extracted:
 		_player_profile.total_extractions += 1
 		_player_profile.total_funds += profit
@@ -658,9 +742,17 @@ func _persist_settlement(data: Dictionary) -> void:
 		var new_achievements := _achievement_system.check_achievements(
 			HOST_PLAYER_ID, _player_profile, session_result)
 		for ach_id in new_achievements:
+			_achievement_system.grant_reward(HOST_PLAYER_ID, _player_profile, ach_id)
 			_player_profile.achievements.append(ach_id)
+	if _player_manager:
+		var exp_gained := PlayerManager.calculate_session_exp(
+			profit, extracted, session_trades)
+		_player_manager.apply_experience(
+			HOST_PLAYER_ID, _player_profile, exp_gained)
 	# 保存
 	_save_manager.save_profile(_player_profile)
+	if _leaderboard_manager:
+		_leaderboard_manager.update_from_profile(_player_profile, "玩家")
 	print("Main: Profile saved — games: %d, extractions: %d, funds: $%d" % [
 		_player_profile.total_games, _player_profile.total_extractions,
 		int(_player_profile.total_funds)])

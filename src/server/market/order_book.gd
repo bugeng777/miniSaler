@@ -40,14 +40,17 @@ func update_prices(prices: Dictionary) -> void:
 
 ## 提交订单
 func submit_order(player_id: int, symbol: StringName, side: int,
-		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
 	if not _books.has(symbol):
 		var reject_id := "invalid_symbol"
 		order_rejected.emit(reject_id, "Unknown symbol: " + str(symbol))
 		return reject_id
 
 	_order_counter += 1
-	var order_id := "ord_%d_%d" % [player_id, _order_counter]
+	var order_id := requested_order_id
+	if order_id.is_empty():
+		order_id = "ord_%d_%d" % [player_id, _order_counter]
 
 	var order := MarketTypes.BookOrder.new()
 	order.order_id = order_id
@@ -75,14 +78,17 @@ func submit_order(player_id: int, symbol: StringName, side: int,
 ## 优先下单（供"闪电下单"技能）
 ## 与普通下单相同，但限价单挂入簿中时插到同价位最前面
 func submit_order_priority(player_id: int, symbol: StringName, side: int,
-		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
 	if not _books.has(symbol):
 		var reject_id := "invalid_symbol"
 		order_rejected.emit(reject_id, "Unknown symbol: " + str(symbol))
 		return reject_id
 
 	_order_counter += 1
-	var order_id := "ord_%d_%d" % [player_id, _order_counter]
+	var order_id := requested_order_id
+	if order_id.is_empty():
+		order_id = "ord_%d_%d" % [player_id, _order_counter]
 
 	var order := MarketTypes.BookOrder.new()
 	order.order_id = order_id
@@ -125,10 +131,8 @@ func _match_market_order(order: MarketTypes.BookOrder) -> void:
 		var fill_qty := mini(order.remaining, best.remaining)
 		best.remaining -= fill_qty
 		order.remaining -= fill_qty
-		if order.remaining > 0:
-			order_partially_filled.emit(order, best.price, fill_qty)
-		else:
-			order_filled.emit(order, best.price, fill_qty)
+		_emit_fill(order, best.price, fill_qty)
+		_emit_fill(best, best.price, fill_qty)
 		if best.remaining <= 0:
 			opposite_side.pop_front()
 
@@ -157,7 +161,8 @@ func _match_limit_order(order: MarketTypes.BookOrder) -> void:
 				var fill_qty := mini(order.remaining, best_ask.remaining)
 				best_ask.remaining -= fill_qty
 				order.remaining -= fill_qty
-				order_filled.emit(order, best_ask.price, fill_qty)
+				_emit_fill(order, best_ask.price, fill_qty)
+				_emit_fill(best_ask, best_ask.price, fill_qty)
 				if best_ask.remaining <= 0:
 					book.asks.pop_front()
 			else:
@@ -170,11 +175,19 @@ func _match_limit_order(order: MarketTypes.BookOrder) -> void:
 				var fill_qty := mini(order.remaining, best_bid.remaining)
 				best_bid.remaining -= fill_qty
 				order.remaining -= fill_qty
-				order_filled.emit(order, best_bid.price, fill_qty)
+				_emit_fill(order, best_bid.price, fill_qty)
+				_emit_fill(best_bid, best_bid.price, fill_qty)
 				if best_bid.remaining <= 0:
 					book.bids.pop_front()
 			else:
 				break
+
+
+func _emit_fill(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+	if order.remaining > 0:
+		order_partially_filled.emit(order, fill_price, fill_qty)
+	else:
+		order_filled.emit(order, fill_price, fill_qty)
 
 
 ## 将未成交的限价单挂入订单簿（普通：按价格排序）

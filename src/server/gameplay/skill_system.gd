@@ -63,6 +63,13 @@ func equip_skills(player_id: int, skill_ids: Array[StringName]) -> void:
 	# 装备完成后立即广播被动效果，供 GameSession 转发给相关子系统
 	var modifiers := get_passive_modifiers(player_id)
 	passive_effects_changed.emit(player_id, modifiers)
+	# 被动技能同样必须进入统一 SkillEffect 分发链。此前这里只发 UI 提示，
+	# 导致资金、手续费和撤离类被动效果实际从未生效。
+	for sid in runtime:
+		var def: SkillTypes.SkillDef = _skill_defs.get(sid, null)
+		if def and def.trigger == GameEnums.SkillTrigger.PASSIVE and _skill_effects.has(sid):
+			var passive_effect: SkillTypes.SkillEffect = _skill_effects[sid]
+			skill_effect_applied.emit(player_id, sid, passive_effect.to_dict())
 
 
 ## 每 tick 更新冷却（由 GameSession 调用）

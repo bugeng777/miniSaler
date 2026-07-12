@@ -59,7 +59,9 @@ class Position:
 
 	func get_market_value(current_price: float) -> float:
 		if is_short:
-			return avg_price * quantity - current_price * quantity
+			# 卖空成交所得已经计入现金；持仓市值必须表示回补负债，
+			# 否则总资产会把卖空所得重复计算一次。
+			return -current_price * quantity
 		else:
 			return current_price * quantity
 
@@ -288,4 +290,3 @@ class LeaderboardEntry:
 		e.rank_tier = data.get("rank_tier", GameEnums.RankTier.BRONZE)
 		e.season_id = data.get("season_id", "")
 		return e
-

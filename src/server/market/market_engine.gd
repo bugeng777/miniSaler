@@ -12,6 +12,7 @@ signal circuit_breaker_triggered(symbol: StringName, duration: float)
 signal market_phase_changed(phase: StringName)
 ## MD-04 修复：转发 OrderBook.order_filled，供 WS4 GameSession 连接（消除 OrderBook 直引）
 signal order_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int)
+signal order_partially_filled_passthrough(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int)
 
 ## ─── 内部组件 ──────────────────────────────────────────────────────────────
 var _price_model: PriceModel = PriceModel.new()
@@ -40,6 +41,9 @@ func _ready() -> void:
 	# MD-04：转发 OrderBook 成交信号，WS4 通过此信号获取成交数据
 	_order_book.order_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
 		order_filled_passthrough.emit(order, fill_price, fill_qty)
+	)
+	_order_book.order_partially_filled.connect(func(order: MarketTypes.BookOrder, fill_price: float, fill_qty: int) -> void:
+		order_partially_filled_passthrough.emit(order, fill_price, fill_qty)
 	)
 
 
@@ -76,12 +80,14 @@ func inject_news_impact(symbol: StringName, impact: Dictionary) -> void:
 
 ## 提交订单（由 GameSession 转发玩家/Bot 的订单）
 func submit_order(player_id: int, symbol: StringName, side: int,
-		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
 	if not _is_running:
 		return ""
 	if _circuit_breaker.is_circuit_broken(symbol):
 		return ""  # 熔断中不可交易
-	return _order_book.submit_order(player_id, symbol, side, order_type, quantity, limit_price)
+	return _order_book.submit_order(player_id, symbol, side, order_type, quantity,
+		limit_price, requested_order_id)
 
 
 ## 获取 OrderBook 引用（供 GameSession 读取深度等）
@@ -143,12 +149,14 @@ func get_ma_cross_signal(symbol: StringName) -> int:
 
 ## 快速下单（供"闪电下单"技能，优先撮合）
 func submit_order_priority(player_id: int, symbol: StringName, side: int,
-		order_type: int, quantity: int, limit_price: float = 0.0) -> String:
+		order_type: int, quantity: int, limit_price: float = 0.0,
+		requested_order_id: String = "") -> String:
 	if not _is_running:
 		return ""
 	if _circuit_breaker.is_circuit_broken(symbol):
 		return ""
-	return _order_book.submit_order_priority(player_id, symbol, side, order_type, quantity, limit_price)
+	return _order_book.submit_order_priority(player_id, symbol, side, order_type, quantity,
+		limit_price, requested_order_id)
 
 
 ## ─── Phase 3 Boss 价格操纵 ───────────────────────────────────────────────

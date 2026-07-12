@@ -9,7 +9,8 @@ var _extract_btn: Button = null
 var _countdown_label: Label = null
 var _status_label: Label = null
 var _is_window_open: bool = false
-var _pulse_tween: Tween = null
+var _blink_timer: Timer = null
+var _blink_on: bool = true
 
 # 颜色常量
 const COLOR_OPEN := Color(0.2, 0.9, 0.3)     # 绿色 - 窗口开放
@@ -21,6 +22,7 @@ const FONT_SIZE_URGENT := 26
 
 func _ready() -> void:
 	_build_ui()
+	add_theme_stylebox_override("panel", PixelTheme.create_warning_panel())
 
 
 func _build_ui() -> void:
@@ -28,13 +30,25 @@ func _build_ui() -> void:
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(vbox)
 
+	var header := HBoxContainer.new()
+	header.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(header)
+	var bolt_left := PixelIcon.new()
+	bolt_left.icon_type = PixelIcon.Icon.LIGHTNING
+	bolt_left.pixel_size = 1
+	header.add_child(bolt_left)
+
 	# 状态标签
 	_status_label = Label.new()
 	_status_label.text = "等待下次窗口"
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.add_theme_font_size_override("font_size", 14)
 	_status_label.add_theme_color_override("font_color", COLOR_CLOSED)
-	vbox.add_child(_status_label)
+	header.add_child(_status_label)
+	var bolt_right := PixelIcon.new()
+	bolt_right.icon_type = PixelIcon.Icon.LIGHTNING
+	bolt_right.pixel_size = 1
+	header.add_child(bolt_right)
 
 	# 倒计时标签
 	_countdown_label = Label.new()
@@ -50,6 +64,10 @@ func _build_ui() -> void:
 	_extract_btn.disabled = true
 	_extract_btn.pressed.connect(func() -> void: extraction_requested.emit())
 	vbox.add_child(_extract_btn)
+	_blink_timer = Timer.new()
+	_blink_timer.wait_time = 0.5
+	_blink_timer.timeout.connect(_on_blink_tick)
+	add_child(_blink_timer)
 
 	# 初始状态: 窗口关闭
 	_set_window_closed()
@@ -84,16 +102,18 @@ func _set_window_closed() -> void:
 
 func _start_flash_animation() -> void:
 	_stop_pulse_animation()
-	_pulse_tween = create_tween()
-	_pulse_tween.set_loops()
-	_pulse_tween.tween_property(_extract_btn, "modulate:a", 0.6, 0.4)
-	_pulse_tween.tween_property(_extract_btn, "modulate:a", 1.0, 0.4)
+	_blink_on = true
+	_blink_timer.start()
 
 
 func _stop_pulse_animation() -> void:
-	if _pulse_tween and _pulse_tween.is_valid():
-		_pulse_tween.kill()
-		_pulse_tween = null
+	if _blink_timer:
+		_blink_timer.stop()
+	_blink_on = true
+	if _extract_btn:
+		_extract_btn.visible = true
+	if _countdown_label:
+		_countdown_label.visible = true
 
 
 ## 更新倒计时显示
@@ -114,9 +134,12 @@ func set_countdown(seconds: float) -> void:
 
 ## 紧迫脉冲动画
 func _start_urgent_pulse() -> void:
-	if _pulse_tween and _pulse_tween.is_valid():
-		return  # 已在播放
-	_pulse_tween = create_tween()
-	_pulse_tween.set_loops()
-	_pulse_tween.tween_property(_countdown_label, "scale", Vector2(1.2, 1.2), 0.25).set_trans(Tween.TRANS_SINE)
-	_pulse_tween.tween_property(_countdown_label, "scale", Vector2(1.0, 1.0), 0.25).set_trans(Tween.TRANS_SINE)
+	if _blink_timer.is_stopped():
+		_blink_timer.start()
+
+
+func _on_blink_tick() -> void:
+	_blink_on = not _blink_on
+	_extract_btn.visible = _blink_on
+	if _countdown_label.text != "":
+		_countdown_label.visible = _blink_on
