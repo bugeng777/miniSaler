@@ -181,6 +181,8 @@ func _build_game_ui() -> void:
 	_ui_manager.register_screen("profile", ProfileScreen.new())
 	_ui_manager.register_screen("leaderboard", LeaderboardScreen.new())
 	_ui_manager.register_screen("tutorial", TutorialScreen.new())
+	# TODO(WS5): SafeBoxScreen 尚未交付，待 WS5 提交 safe_box_screen.gd 后启用下行
+	# _ui_manager.register_screen("safe_box", SafeBoxScreen.new())
 
 	# Phase 3: VFX 图层（覆盖在所有屏幕之上）
 	_vfx_layer = VfxLayer.new()
@@ -269,6 +271,14 @@ func _connect_ui_signals() -> void:
 			_extraction_engine.player_busted.connect(_on_vfx_player_busted)
 	if _bot_manager and _bot_manager.has_signal("boss_entered"):
 		_bot_manager.boss_entered.connect(_on_vfx_boss_entered)
+
+	# ── Phase 2 补漏: 被动技能效果变更（WS2）──
+	if _skill_system and _skill_system.has_signal("passive_effects_changed"):
+		_skill_system.passive_effects_changed.connect(_on_passive_effects)
+
+	# ── Phase 2 补漏: 订单被拒绝（WS3）──
+	if _player_manager and _player_manager.has_signal("order_rejected"):
+		_player_manager.order_rejected.connect(_on_order_rejected)
 
 
 ## ─── UI 事件处理 ─────────────────────────────────────────────────────────────
@@ -423,7 +433,7 @@ func _on_market_tick(data: Dictionary) -> void:
 					for snap in snapshots:
 						lb_data.append({
 							"player_name": snap.player_name,
-							"total_assets": snap.get_total_assets(prices),
+							"total_assets": snap.total_assets,
 						})
 					lb.update_leaderboard(lb_data)
 			
@@ -578,6 +588,35 @@ func _on_vfx_boss_entered(boss_name: String, _boss_data: Dictionary) -> void:
 func _on_tutorial_done() -> void:
 	_ui_manager.show_screen("era_select")
 	_populate_era_screen()
+
+
+## Phase 2 补漏 Task 2.1: 被动技能效果变更处理
+## WS2 skill_system.passive_effects_changed(player_id, modifiers) 的消费方
+## modifiers: {skill_id: base_value} 字典，包含所有已装备被动技能的效果
+func _on_passive_effects(player_id: int, modifiers: Dictionary) -> void:
+	if player_id != HOST_PLAYER_ID:
+		return
+	var trading := _find_screen("trading")
+	if trading is TradingScreen and trading.visible:
+		var names: Array[String] = []
+		for sid in modifiers:
+			var def := _skill_system.get_skill_def(StringName(sid)) if _skill_system else null
+			if def:
+				names.append(def.display_name)
+		if names.size() > 0:
+			(trading as TradingScreen).add_news("[被动技能] 已生效: " + ", ".join(names))
+
+
+## Phase 2 补漏 Task 2.2: 订单被拒绝处理
+## WS3 player_manager.order_rejected(player_id, reason) 的消费方
+func _on_order_rejected(player_id: int, reason: String) -> void:
+	if player_id != HOST_PLAYER_ID:
+		return
+	var trading := _find_screen("trading")
+	if trading is TradingScreen and trading.visible:
+		(trading as TradingScreen).add_news("[订单拒绝] " + reason)
+	if _sfx_manager:
+		_sfx_manager.play_sfx(SfxManager.SfxType.NEWS_ALERT)
 
 
 ## 辅助：查找已注册屏幕
