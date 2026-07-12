@@ -364,6 +364,8 @@ func _on_play_again() -> void:
 	var trading := _find_screen("trading")
 	if trading is TradingScreen:
 		(trading as TradingScreen).reset_screen()
+	# 清理增量快照缓存
+	_snapshot_cache.clear()
 	_game_session.goto_era_select()
 	_populate_era_screen()
 	_show_main_menu()
@@ -438,11 +440,21 @@ func _on_phase_changed(phase: int, data: Dictionary) -> void:
 				(settlement as SettlementScreen).show_result(data)
 
 
+## Host 模式增量快照缓存
+var _snapshot_cache: Dictionary = {}  ## symbol -> Dictionary (完整快照)
+const _DELTA_KEY_MAP: Dictionary = {
+	"p": "close", "v": "volume", "h": "high", "l": "low",
+	"cb": "is_circuit_broken", "cr": "circuit_break_remaining",
+}
+
+
 func _on_data_received(msg: Dictionary) -> void:
 	var msg_type: StringName = msg.get("msg_type", &"")
 	match msg_type:
 		NetworkProtocol.MSG_MARKET_TICK:
 			_on_market_tick(msg.get("data", {}))
+		NetworkProtocol.MSG_MARKET_TICK_DELTA:
+			_on_market_tick_delta(msg)
 		NetworkProtocol.MSG_NEWS:
 			_on_news_received(msg)
 		NetworkProtocol.MSG_EXTRACTION_WINDOW:
@@ -453,6 +465,33 @@ func _on_data_received(msg: Dictionary) -> void:
 			_on_skill_state(msg)
 		NetworkProtocol.MSG_BOSS_EVENT:
 			_on_boss_event(msg)
+
+
+## Host 模式增量快照重建
+func _on_market_tick_delta(msg: Dictionary) -> void:
+	for entry in msg.get("c", []):
+		var sym: StringName = StringName(entry.get("s", entry.get("symbol", "")))
+		if sym == &"":
+			continue
+		if entry.has("name"):
+			# 完整快照（首次出现的股票）
+			_snapshot_cache[sym] = entry.duplicate()
+		else:
+			# 字段级 delta：合并到缓存
+			if not _snapshot_cache.has(sym):
+				_snapshot_cache[sym] = {"symbol": sym}
+			var cached: Dictionary = _snapshot_cache[sym]
+			for short_key in _DELTA_KEY_MAP:
+				if entry.has(short_key):
+					cached[_DELTA_KEY_MAP[short_key]] = entry[short_key]
+	# 重建为 _on_market_tick 期望的格式
+	var reconstructed := {
+		"tick_index": msg.get("t", 0),
+		"elapsed_time": msg.get("e", 0.0),
+		"fear_greed_index": msg.get("f", 50.0),
+		"snapshots": _snapshot_cache.values(),
+	}
+	_on_market_tick(reconstructed)
 
 
 func _on_market_tick(data: Dictionary) -> void:
