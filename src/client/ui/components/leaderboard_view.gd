@@ -12,8 +12,11 @@ func _ready() -> void:
 
 
 func update_leaderboard(players: Array[Dictionary]) -> void:
+	# 删除旧行（保留标题 child[0]）
 	while get_child_count() > 1:
-		get_child(1).queue_free()
+		var child := get_child(get_child_count() - 1)
+		remove_child(child)
+		child.queue_free()
 	# 按总资产排序
 	players.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return a.get("total_assets", 0.0) > b.get("total_assets", 0.0))

@@ -469,7 +469,8 @@ func _on_data_received(msg: Dictionary) -> void:
 
 ## Host 模式增量快照重建
 func _on_market_tick_delta(msg: Dictionary) -> void:
-	for entry in msg.get("c", []):
+	var entries: Array = msg.get("c", [])
+	for entry in entries:
 		var sym: StringName = StringName(entry.get("s", entry.get("symbol", "")))
 		if sym == &"":
 			continue
@@ -489,7 +490,7 @@ func _on_market_tick_delta(msg: Dictionary) -> void:
 		"tick_index": msg.get("t", 0),
 		"elapsed_time": msg.get("e", 0.0),
 		"fear_greed_index": msg.get("f", 50.0),
-		"snapshots": _snapshot_cache.values(),
+		"snapshots": Array(_snapshot_cache.values()),
 	}
 	_on_market_tick(reconstructed)
 
